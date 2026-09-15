@@ -1,0 +1,6 @@
+{
+  "name": "LeaderForge Academic Summarizer",
+  "description": "An AI-powered academic coursework and research document summarization platform for The East Africa University, featuring intelligent reflection, NLP extraction, and study tools.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
