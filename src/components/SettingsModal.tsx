@@ -1,5 +1,13 @@
-import React, { useState } from 'react';
-import { X, Server, Key, Cpu, Shield, Database, Check } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { X, Server, Check, RotateCw, AlertCircle, Wifi } from 'lucide-react';
+import { ApiError, DEFAULT_API_BASE, getApiBase, getHealth, normalizeApiBase, setApiBase } from '../lib/api';
+import type { HealthResponse } from '../types';
+
+type ConnectionState =
+  | { status: 'idle' }
+  | { status: 'checking' }
+  | { status: 'ok'; health: HealthResponse; latencyMs: number }
+  | { status: 'error'; message: string };
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -10,16 +18,64 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   isOpen,
   onClose,
 }) => {
-  const [apiEndpoint, setApiEndpoint] = useState('http://localhost:8000/api/v1');
+  const [apiEndpoint, setApiEndpoint] = useState(getApiBase);
+  const [connection, setConnection] = useState<ConnectionState>({ status: 'idle' });
+  const [baseError, setBaseError] = useState<string | null>(null);
+  const checkId = useRef(0);
   const [selectedModel, setSelectedModel] = useState('bert-academic-v2');
   const [useOcr, setUseOcr] = useState(true);
   const [enableSwahili, setEnableSwahili] = useState(true);
   const [savedSuccess, setSavedSuccess] = useState(false);
 
+  const testConnection = async (base: string) => {
+    const normalized = normalizeApiBase(base);
+    if (!normalized) {
+      setBaseError('Enter a path like /api or a full http(s) URL such as https://host/api.');
+      setConnection({ status: 'idle' });
+      return;
+    }
+    setBaseError(null);
+    const id = ++checkId.current;
+    setConnection({ status: 'checking' });
+    const started = performance.now();
+    try {
+      const health = await getHealth({ baseUrl: normalized });
+      if (id === checkId.current) {
+        setConnection({ status: 'ok', health, latencyMs: Math.round(performance.now() - started) });
+      }
+    } catch (err) {
+      if (id === checkId.current) {
+        setConnection({
+          status: 'error',
+          message: err instanceof ApiError ? err.message : 'Connection check failed.',
+        });
+      }
+    }
+  };
+
+  // Re-check the saved endpoint each time the dialog opens.
+  useEffect(() => {
+    if (!isOpen) return;
+    const saved = getApiBase();
+    setApiEndpoint(saved);
+    void testConnection(saved);
+    return () => {
+      checkId.current++;
+    };
+  }, [isOpen]);
+
   if (!isOpen) return null;
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
+    const normalized = normalizeApiBase(apiEndpoint);
+    if (!normalized) {
+      setBaseError('Enter a path like /api or a full http(s) URL such as https://host/api.');
+      return;
+    }
+    setBaseError(null);
+    setApiBase(normalized);
+    setApiEndpoint(normalized);
     setSavedSuccess(true);
     setTimeout(() => {
       setSavedSuccess(false);
@@ -40,7 +96,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
             <div>
               <h3 className="font-bold text-slate-900 text-sm">System & Backend Configuration</h3>
-              <p className="text-[11px] text-slate-500">Frontend hook points for developer backend integration</p>
+              <p className="text-[11px] text-slate-500">API connection and processing preferences</p>
             </div>
           </div>
           <button
@@ -54,7 +110,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         <form onSubmit={handleSave} className="p-6 space-y-4 text-xs">
           
           <div className="p-3 bg-blue-50/70 border border-blue-200/80 rounded-2xl text-blue-900 leading-relaxed text-[11px]">
-            <span className="font-bold">Developer Notice:</span> The user requested frontend-only construction with backend hooks left open. Configure your server endpoints below for seamless connection with your Django / Flask API.
+            <span className="font-bold">Backend:</span> The Express API in <code className="font-mono">server/</code> serves <code className="font-mono">/api</code>. In development Vite proxies it automatically; change the URL below only to point at a separately hosted API.
           </div>
 
           <div>
@@ -66,9 +122,51 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               value={apiEndpoint}
               onChange={(e) => setApiEndpoint(e.target.value)}
               className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl outline-none font-mono text-xs"
-              placeholder="https://api.eastafrica.edu/summarize"
+              placeholder={DEFAULT_API_BASE}
+              aria-invalid={baseError ? true : undefined}
             />
-            <p className="text-[10px] text-slate-400 mt-1">Routes expected: /api/summarize, /api/documents, /api/feedback</p>
+            {baseError && <p className="text-[10px] text-red-600 mt-1">{baseError}</p>}
+            <p className="text-[10px] text-slate-400 mt-1">Routes: /health, /extract, /summarize, /documents, /feedback</p>
+
+            <div className="mt-2 flex items-center justify-between gap-3">
+              <div
+                id="api-connection-status"
+                role="status"
+                aria-live="polite"
+                className="flex items-center gap-1.5 text-[11px] min-w-0"
+              >
+                {connection.status === 'checking' && (
+                  <>
+                    <RotateCw className="w-3.5 h-3.5 text-slate-400 animate-spin shrink-0" />
+                    <span className="text-slate-500">Checking connection...</span>
+                  </>
+                )}
+                {connection.status === 'ok' && (
+                  <>
+                    <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    <span className="text-emerald-700 truncate">
+                      Connected &middot; v{connection.health.version} &middot; {connection.health.environment} &middot; {connection.latencyMs} ms
+                    </span>
+                  </>
+                )}
+                {connection.status === 'error' && (
+                  <>
+                    <AlertCircle className="w-3.5 h-3.5 text-red-600 shrink-0" />
+                    <span className="text-red-700 truncate" title={connection.message}>{connection.message}</span>
+                  </>
+                )}
+              </div>
+              <button
+                type="button"
+                id="api-test-connection-btn"
+                onClick={() => void testConnection(apiEndpoint)}
+                disabled={connection.status === 'checking'}
+                className="shrink-0 px-3 py-1.5 border border-slate-200 hover:bg-slate-50 rounded-lg font-semibold text-slate-700 flex items-center gap-1.5 disabled:opacity-50"
+              >
+                <Wifi className="w-3.5 h-3.5" />
+                <span>Test connection</span>
+              </button>
+            </div>
           </div>
 
           <div>

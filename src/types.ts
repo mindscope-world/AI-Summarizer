@@ -93,3 +93,42 @@ export interface SummarizeJobConfig {
   model: 'BERT-Academic' | 'T5-EastAfrica' | 'GPT-Academic';
   category: string;
 }
+
+// ---------------------------------------------------------------------------
+// API contract (shared by the Express server in /server and src/lib/api.ts)
+// ---------------------------------------------------------------------------
+
+export interface HealthResponse {
+  status: 'ok';
+  service: string;
+  version: string;
+  environment: 'development' | 'production' | 'test';
+  uptimeSeconds: number;
+  timestamp: string;
+}
+
+export type ApiErrorCode =
+  | 'bad_request'
+  | 'validation_failed'
+  | 'unauthorized'
+  | 'forbidden'
+  | 'not_found'
+  | 'payload_too_large'
+  | 'unsupported_media_type'
+  | 'rate_limited'
+  | 'not_implemented'
+  | 'internal_error';
+
+export interface ApiErrorDetail {
+  path: string;
+  message: string;
+}
+
+export interface ApiErrorBody {
+  error: {
+    code: ApiErrorCode;
+    message: string;
+    requestId: string;
+    details?: ApiErrorDetail[];
+  };
+}

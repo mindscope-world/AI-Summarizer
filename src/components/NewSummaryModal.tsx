@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { DocumentSummary, SummarizeJobConfig } from '../types';
 import { cn } from '../lib/utils';
+import { useAuthUser } from '../lib/useAuthUser';
 
 interface NewSummaryModalProps {
   isOpen: boolean;
@@ -28,6 +29,7 @@ export const NewSummaryModal: React.FC<NewSummaryModalProps> = ({
   onClose,
   onCreated,
 }) => {
+  const authUser = useAuthUser();
   const [sourceType, setSourceType] = useState<'upload' | 'paste' | 'library'>('upload');
   
   // Input fields
@@ -176,8 +178,8 @@ export const NewSummaryModal: React.FC<NewSummaryModalProps> = ({
       sourceMetadata: {
         fileName: selectedFileName || `${finalTitle.toLowerCase().replace(/\s+/g, '_')}.pdf`,
         fileType: 'PDF',
-        author: 'Noel Juma Muhemba',
-        institution: 'The East Africa University',
+        author: authUser?.fullName,
+        institution: authUser?.institution ?? 'The East Africa University',
         originalWordCount: pastedText ? pastedText.split(' ').length * 4 : 2800,
         summaryWordCount: 380,
         reductionRate: '86%',

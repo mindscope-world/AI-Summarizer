@@ -12,6 +12,7 @@ import {
   CheckCircle2
 } from 'lucide-react';
 import { DocumentSummary } from '../types';
+import { useAuthUser } from '../lib/useAuthUser';
 
 interface DashboardViewProps {
   documents: DocumentSummary[];
@@ -26,6 +27,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onNewDocClick,
   onOpenArchitecture,
 }) => {
+  const authUser = useAuthUser();
   const totalWordsOriginal = documents.reduce((acc, d) => acc + (d.sourceMetadata?.originalWordCount || 2000), 0);
   const totalWordsSummary = documents.reduce((acc, d) => acc + (d.sourceMetadata?.summaryWordCount || 400), 0);
   const hoursSaved = ((totalWordsOriginal - totalWordsSummary) / 200 / 60).toFixed(1); // 200 words per minute average reading speed
@@ -38,10 +40,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         <div className="space-y-1.5 max-w-xl">
           <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-800 font-semibold text-[11px] border border-emerald-200/60">
             <GraduationCap className="w-3.5 h-3.5 text-emerald-600" />
-            <span>The East Africa University • BCSITP/0003/S24</span>
+            <span>{authUser?.institution ?? 'The East Africa University'}{authUser?.studentId ? ` • ${authUser.studentId}` : ''}</span>
           </div>
           <h1 className="text-xl lg:text-2xl font-bold text-slate-900 tracking-tight">
-            Welcome back, Noel Juma Muhemba
+            Welcome back{authUser ? `, ${authUser.fullName}` : ''}
           </h1>
           <p className="text-slate-500 leading-relaxed text-xs">
             Your automated summarization dashboard is actively synthesizing academic literature, lecture transcripts, and research papers.

@@ -26,28 +26,28 @@ const STORAGE_KEY = 'supabase_academic_auth_session';
 // Demo campus accounts for fast switching & testing
 export const DEMO_CAMPUS_ACCOUNTS: AcademicUser[] = [
   {
-    id: 'usr_noel_01',
-    email: 'paulmwaura254@gmail.com',
-    fullName: 'Noel Juma Muhemba',
+    id: 'usr_demo_student',
+    email: 'student@demo.eau.example',
+    fullName: 'Demo Student',
     avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80',
     institution: 'The East Africa University',
-    studentId: 'BCSITP/0003/S24',
+    studentId: 'BCSITP/0000/S24',
     role: 'student',
     createdAt: '2026-01-15T08:00:00Z',
   },
   {
-    id: 'usr_geoffrey_02',
-    email: 'g.sagwe@eau.ac.ke',
-    fullName: 'Mr. Geoffrey Sagwe',
+    id: 'usr_demo_faculty',
+    email: 'faculty@demo.eau.example',
+    fullName: 'Demo Faculty',
     avatarUrl: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=100&auto=format&fit=crop&q=80',
     institution: 'The East Africa University',
     role: 'faculty',
     createdAt: '2025-09-01T08:00:00Z',
   },
   {
-    id: 'usr_sarah_03',
-    email: 's.cherop@eau.ac.ke',
-    fullName: 'Dr. Sarah Cherop',
+    id: 'usr_demo_researcher',
+    email: 'researcher@demo.eau.example',
+    fullName: 'Demo Researcher',
     avatarUrl: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=100&auto=format&fit=crop&q=80',
     institution: 'The East Africa University',
     role: 'researcher',
@@ -77,7 +77,7 @@ class SupabaseAcademicClient {
     } catch (e) {
       console.warn('Failed to load Supabase session from localStorage', e);
     }
-    // Default to Noel's student session for smooth out-of-the-box demo experience
+    // Default to the demo student session for a smooth out-of-the-box demo experience
     this.session = {
       accessToken: 'sb_jwt_' + Math.random().toString(36).substring(2),
       expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000,
@@ -150,7 +150,7 @@ class SupabaseAcademicClient {
     this.session = {
       accessToken: 'sb_google_oauth_' + Math.random().toString(36).substring(2),
       expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000,
-      user: DEMO_CAMPUS_ACCOUNTS[0], // Noel Juma Muhemba
+      user: DEMO_CAMPUS_ACCOUNTS[0], // demo student
     };
     this.persist();
     return { session: this.session, error: null };

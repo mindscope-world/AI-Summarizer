@@ -18,6 +18,7 @@ import { SettingsModal } from './components/SettingsModal';
 import { CommentsDrawer } from './components/CommentsDrawer';
 import { initialDocuments } from './data/mockDocuments';
 import { DocumentSummary, NavigationTab, CommentItem } from './types';
+import { useAuthUser } from './lib/useAuthUser';
 
 export default function App() {
   // Navigation tab state (Journal is default, matching image.png)
@@ -47,6 +48,9 @@ export default function App() {
   const [isArchitectureOpen, setIsArchitectureOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isCommentsOpen, setIsCommentsOpen] = useState(false);
+
+  // Signed-in user (identity for comments/metadata; never hard-coded)
+  const authUser = useAuthUser();
 
   // User role
   const [userRole, setUserRole] = useState<'student' | 'researcher' | 'faculty'>('student');
@@ -120,8 +124,8 @@ export default function App() {
   const handleAddComment = (commentText: string) => {
     const newComment: CommentItem = {
       id: `c-${Date.now()}`,
-      author: userRole === 'faculty' ? 'Supervisor (Faculty)' : 'Noel Juma Muhemba',
-      avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80',
+      author: authUser?.fullName ?? (userRole === 'faculty' ? 'Faculty' : 'Student'),
+      avatar: authUser?.avatarUrl ?? '',
       text: commentText,
       timestamp: 'Just now',
     };
