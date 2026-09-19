@@ -13,6 +13,8 @@ import {createExportRouter} from './routes/export';
 import {createExtractRouter} from './routes/extract';
 import {createFeedbackRouter} from './routes/feedback';
 import {createHealthRouter} from './routes/health';
+import {createGeminiOcr} from './pipeline/ocr';
+import type {IngestDeps} from './pipeline/ingest';
 import {createSummarizeRouter} from './routes/summarize';
 
 export interface AppOptions {
@@ -20,6 +22,8 @@ export interface AppOptions {
   logger: Logger;
   /** Built Vite app to serve. Defaults to ./dist in production only. */
   staticDir?: string | false;
+  /** Overrides for the ingestion pipeline (tests inject a fake OCR provider, etc.). */
+  ingestion?: Partial<IngestDeps>;
 }
 
 const baseHeaders: RequestHandler = (_req, res, next) => {
@@ -33,12 +37,23 @@ const noStore: RequestHandler = (_req, res, next) => {
   next();
 };
 
-export function createApp({env, logger, staticDir}: AppOptions): Express {
+export function createApp({env, logger, staticDir, ingestion}: AppOptions): Express {
   const app = express();
   app.disable('x-powered-by');
   app.set('trust proxy', env.TRUST_PROXY);
 
   app.use(requestId, accessLog(logger), baseHeaders);
+
+  const ingestDeps: IngestDeps = {
+    limits: {
+      maxPdfPages: env.MAX_PDF_PAGES,
+      maxExtractedChars: env.MAX_EXTRACTED_CHARS,
+      urlTimeoutMs: env.URL_FETCH_TIMEOUT_MS,
+      urlMaxBytes: Math.round(env.URL_FETCH_MAX_MB * 1024 * 1024),
+    },
+    ocr: createGeminiOcr({apiKey: env.GEMINI_API_KEY, model: env.GEMINI_OCR_MODEL}),
+    ...ingestion,
+  };
 
   const api = express.Router();
   api.use(noStore);
@@ -54,7 +69,7 @@ export function createApp({env, logger, staticDir}: AppOptions): Express {
   api.use(express.json({limit: env.JSON_BODY_LIMIT}));
 
   api.use(createHealthRouter(env));
-  api.use(createExtractRouter(env));
+  api.use(createExtractRouter({env, logger, ingestion: ingestDeps}));
   api.use(createSummarizeRouter());
   api.use(createExportRouter());
   api.use(createDocumentsRouter());

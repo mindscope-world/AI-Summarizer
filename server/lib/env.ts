@@ -17,6 +17,12 @@ const envSchema = z.object({
     .regex(/^\d+(kb|mb)$/i, 'JSON_BODY_LIMIT must look like "512kb" or "2mb"')
     .default('2mb'),
   RATE_LIMIT_PER_MINUTE: z.coerce.number().int().positive().default(60),
+  EXTRACT_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().positive().default(20),
+  MAX_PDF_PAGES: z.coerce.number().int().positive().max(5000).default(500),
+  MAX_EXTRACTED_CHARS: z.coerce.number().int().positive().default(3_000_000),
+  URL_FETCH_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120_000).default(15_000),
+  URL_FETCH_MAX_MB: z.coerce.number().positive().max(100).default(10),
+  GEMINI_OCR_MODEL: z.string().trim().min(1).default('gemini-2.5-flash'),
   CORS_ORIGINS: z
     .string()
     .default('')

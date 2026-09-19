@@ -7,6 +7,17 @@
 
 ---
 
+## Progress
+
+| Phase | Status |
+|---|---|
+| 0 Baseline & housekeeping | Done, except reading the PDF / locking D1-D5 (PDF unreadable from the dev environment; defaults in §3 assumed) |
+| 1 Backend foundation | Done |
+| 2 Ingestion & preprocessing | Done. OCR uses Gemini (not Tesseract); its live path is untested without a real API key |
+| 3-8 | Not started |
+
+---
+
 ## 1. Where the project is today
 
 **Bottom line: it is a high-fidelity, frontend-only prototype. Nothing in the 6-stage pipeline actually runs.** The UI (≈6,600 lines of React 19 + Vite 6 + Tailwind 4) is largely complete; every "AI" or "backend" behaviour is simulated.

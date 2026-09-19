@@ -1,5 +1,5 @@
 import {afterEach, describe, expect, it, vi} from 'vitest';
-import {ApiError, apiRequest, getApiBase, getHealth, normalizeApiBase, setApiBase} from './api';
+import {ApiError, apiRequest, describeApiError, extractDocument, getApiBase, getHealth, normalizeApiBase, setApiBase} from './api';
 
 function mockFetch(impl: (url: string, init: RequestInit) => Response | Promise<Response>) {
   const fn = vi.fn(async (url: string, init: RequestInit) => impl(url, init));
@@ -151,3 +151,44 @@ describe('getHealth', () => {
     expect(fetchMock.mock.calls[0][0]).toBe('/api/health');
   });
 });
+
+describe('extractDocument', () => {
+  it('sends a file as multipart with stripReferences as a string field', async () => {
+    const fetchMock = mockFetch(() => json({text: 'x'}));
+    const file = new File(['hello'], 'notes.txt', {type: 'text/plain'});
+    await extractDocument({file, stripReferences: true});
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('/api/extract');
+    expect(init.method).toBe('POST');
+    const form = init.body as FormData;
+    expect(form).toBeInstanceOf(FormData);
+    expect((form.get('file') as File).name).toBe('notes.txt');
+    expect(form.get('stripReferences')).toBe('true');
+    expect((init.headers as Record<string, string>)['Content-Type']).toBeUndefined();
+  });
+
+  it('sends pasted text and URLs as JSON (multipart fields are size-capped)', async () => {
+    const fetchMock = mockFetch(() => json({text: 'x'}));
+    await extractDocument({text: 'a'.repeat(10)});
+    await extractDocument({url: 'https://example.com/a', stripReferences: false});
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body as string)).toEqual({text: 'aaaaaaaaaa'});
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body as string)).toEqual({url: 'https://example.com/a', stripReferences: false});
+  });
+
+  it('surfaces server errors as ApiError', async () => {
+    mockFetch(() => json({error: {code: 'unprocessable', message: 'The PDF is password-protected.', requestId: 'r1'}}, {status: 422}));
+    const err = (await extractDocument({text: 'x'}).catch((e) => e)) as ApiError;
+    expect(err).toMatchObject({status: 422, code: 'unprocessable', message: 'The PDF is password-protected.'});
+  });
+});
+
+describe('describeApiError', () => {
+  it('uses the server message for content problems and friendly text for transport problems', () => {
+    expect(describeApiError(new ApiError('The PDF is password-protected.', 422, 'unprocessable'))).toBe('The PDF is password-protected.');
+    expect(describeApiError(new ApiError('x', 0, 'network_error'))).toMatch(/Could not reach the server/);
+    expect(describeApiError(new ApiError('x', 0, 'timeout'))).toMatch(/too long/);
+    expect(describeApiError(new ApiError('x', 429, 'rate_limited'))).toMatch(/Wait a minute/);
+    expect(describeApiError(new Error('boom'))).toMatch(/Something went wrong/);
+  });
+});
+

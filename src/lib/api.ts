@@ -1,4 +1,4 @@
-import type {ApiErrorBody, ApiErrorCode, ApiErrorDetail, HealthResponse} from '../types';
+import type {ApiErrorBody, ApiErrorCode, ApiErrorDetail, ExtractionResult, HealthResponse} from '../types';
 
 export const DEFAULT_API_BASE = '/api';
 const STORAGE_KEY = 'leaderforge_api_base';
@@ -129,3 +129,55 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
 export function getHealth(options: Pick<RequestOptions, 'signal' | 'timeoutMs' | 'baseUrl'> = {}): Promise<HealthResponse> {
   return apiRequest<HealthResponse>('/health', {timeoutMs: 8_000, ...options});
 }
+
+/** Client-side mirror of the server's upload rules; the server remains the authority. */
+export const ACCEPTED_EXTENSIONS = ['.pdf', '.docx', '.txt', '.md'] as const;
+export const MAX_UPLOAD_MB = 50;
+
+export interface ExtractInput {
+  /** Provide exactly one of file / url / text. */
+  file?: File;
+  url?: string;
+  text?: string;
+  /** Drop a trailing references/bibliography section. */
+  stripReferences?: boolean;
+}
+
+/** Extraction can involve OCR or a slow website, so it gets a longer timeout than normal calls. */
+const EXTRACT_TIMEOUT_MS = 120_000;
+
+export function extractDocument(
+  input: ExtractInput,
+  options: Pick<RequestOptions, 'signal' | 'timeoutMs' | 'baseUrl'> = {},
+): Promise<ExtractionResult> {
+  const opts = {method: 'POST' as const, timeoutMs: EXTRACT_TIMEOUT_MS, ...options};
+  if (input.file) {
+    const form = new FormData();
+    form.append('file', input.file);
+    if (input.stripReferences !== undefined) form.append('stripReferences', String(input.stripReferences));
+    return apiRequest<ExtractionResult>('/extract', {...opts, body: form});
+  }
+  // Text and URLs go as JSON: multipart form fields are capped at 1 MB on the server.
+  return apiRequest<ExtractionResult>('/extract', {
+    ...opts,
+    body: {url: input.url, text: input.text, stripReferences: input.stripReferences},
+  });
+}
+
+/** Turns any error from the API into a sentence a student can act on. */
+export function describeApiError(err: unknown): string {
+  if (err instanceof ApiError) {
+    switch (err.code) {
+      case 'network_error':
+        return 'Could not reach the server. Check that it is running and try again.';
+      case 'timeout':
+        return 'This is taking too long. Try a smaller file or try again later.';
+      case 'rate_limited':
+        return 'You are going too fast. Wait a minute and try again.';
+      default:
+        return err.message;
+    }
+  }
+  return 'Something went wrong. Please try again.';
+}
+

@@ -1,19 +1,24 @@
 import type {Server} from 'node:http';
 import type {AddressInfo} from 'node:net';
 import {afterEach, describe, expect, it} from 'vitest';
-import type {ApiErrorBody, HealthResponse} from '../src/types';
+import type {ApiErrorBody, ExtractionResult, HealthResponse} from '../src/types';
 import {createApp} from './app';
 import {loadEnv} from './lib/env';
 import {createLogger} from './lib/logger';
+import type {IngestDeps} from './pipeline/ingest';
+import type {OcrProvider} from './pipeline/ocr';
+import {makeDocx, makePdf} from './testing/fixtures';
+import {startFixtureServer, type FixtureServer} from './testing/httpServer';
 
 const SECRET = 'test-secret-key-do-not-leak';
 const servers: Server[] = [];
 
-async function start(overrides: Record<string, string> = {}) {
+async function start(overrides: Record<string, string> = {}, ingestion: Partial<IngestDeps> = {}) {
   const env = loadEnv({GEMINI_API_KEY: SECRET, NODE_ENV: 'test', ...overrides});
   const lines: string[] = [];
   const logger = createLogger('debug', (line) => lines.push(line));
-  const app = createApp({env, logger, staticDir: false});
+  // Never let a test reach the real OCR provider.
+  const app = createApp({env, logger, staticDir: false, ingestion: {ocr: undefined, ...ingestion}});
   const server = await new Promise<Server>((resolve) => {
     const s = app.listen(0, () => resolve(s));
   });
@@ -22,8 +27,11 @@ async function start(overrides: Record<string, string> = {}) {
   return {base, lines};
 }
 
+const fixtures: FixtureServer[] = [];
+
 afterEach(async () => {
   await Promise.all(servers.splice(0).map((s) => new Promise((r) => s.close(r))));
+  await Promise.all(fixtures.splice(0).map((f) => f.close()));
 });
 
 async function errorOf(res: Response): Promise<ApiErrorBody['error']> {
@@ -142,30 +150,137 @@ describe('validation', () => {
   });
 });
 
-describe('uploads', () => {
-  const upload = (base: string, name: string, size: number) => {
+const PROSE = [
+  'Distributed consensus protocols allow independent nodes to agree on a single value even when some of them fail.',
+  'Paxos and Raft are the two best known examples, and both rely on majority quorums to make progress safely.',
+].join(' ');
+
+describe('POST /api/extract', () => {
+  const upload = (base: string, name: string, data: Buffer | number, fields: Record<string, string> = {}) => {
     const form = new FormData();
-    form.append('file', new Blob([new Uint8Array(size)]), name);
+    const bytes = typeof data === 'number' ? new Uint8Array(data) : new Uint8Array(data);
+    form.append('file', new Blob([bytes]), name);
+    for (const [k, v] of Object.entries(fields)) form.append(k, v);
     return fetch(`${base}/api/extract`, {method: 'POST', body: form});
   };
+  const postJson = (base: string, body: unknown) =>
+    fetch(`${base}/api/extract`, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(body)});
 
-  it('requires a file or url', async () => {
+  it('extracts an uploaded PDF', async () => {
     const {base} = await start();
-    const res = await fetch(`${base}/api/extract`, {
-      method: 'POST',
-      headers: {'content-type': 'application/json'},
-      body: '{}',
-    });
-    // JSON body is not multipart, multer skips it, and validation catches the missing input.
-    expect(res.status).toBe(400);
-    expect((await errorOf(res)).code).toBe('validation_failed');
+    const res = await upload(base, 'lecture.pdf', makePdf([[PROSE], [PROSE]]));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as ExtractionResult;
+    expect(body.source).toMatchObject({kind: 'file', format: 'pdf', fileName: 'lecture.pdf', pageCount: 2, ocrUsed: false});
+    expect(body.text).toContain('Paxos and Raft');
+    expect(body.language.code).toBe('en');
+    expect(body.wordCount).toBeGreaterThan(30);
+    expect(body.chunks.length).toBe(body.stats.chunks);
   });
 
-  it('rejects unsupported file types with 415', async () => {
+  it('extracts an uploaded DOCX and a TXT', async () => {
     const {base} = await start();
-    const res = await upload(base, 'malware.exe', 10);
-    expect(res.status).toBe(415);
-    expect((await errorOf(res)).code).toBe('unsupported_media_type');
+    const docx = await upload(base, 'notes.docx', await makeDocx([PROSE, PROSE]));
+    expect(docx.status).toBe(200);
+    expect(((await docx.json()) as ExtractionResult).source.format).toBe('docx');
+
+    const txt = await upload(base, 'notes.txt', Buffer.from(PROSE));
+    expect(txt.status).toBe(200);
+    expect(((await txt.json()) as ExtractionResult).source.format).toBe('txt');
+  });
+
+  it('extracts pasted text sent as JSON and honours stripReferences', async () => {
+    const {base} = await start();
+    const text = ['Intro paragraph.', 'Body paragraph.', 'More body.', 'References', 'Smith (2020).'].join('\n\n');
+    const res = await postJson(base, {text, stripReferences: true});
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as ExtractionResult;
+    expect(body.source.kind).toBe('text');
+    expect(body.text).not.toContain('Smith');
+  });
+
+  it('accepts stripReferences as a multipart string field', async () => {
+    const {base} = await start();
+    const text = ['Intro paragraph.', 'Body paragraph.', 'More body.', 'References', 'Smith (2020).'].join('\n\n');
+    const res = await upload(base, 'a.txt', Buffer.from(text), {stripReferences: 'true'});
+    expect(((await res.json()) as ExtractionResult).text).not.toContain('Smith');
+  });
+
+  it('uses OCR for a scanned PDF and reports it', async () => {
+    const ocr: OcrProvider = {name: 'fake', transcribePdf: async () => [PROSE]};
+    const {base} = await start({}, {ocr});
+    const res = await upload(base, 'scan.pdf', makePdf([[]]));
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as ExtractionResult).source.ocrUsed).toBe(true);
+  });
+
+  it('returns 422 for a scanned PDF when OCR is unavailable', async () => {
+    const {base} = await start();
+    const res = await upload(base, 'scan.pdf', makePdf([[]]));
+    expect(res.status).toBe(422);
+    expect((await errorOf(res)).code).toBe('unprocessable');
+  });
+
+  it('requires exactly one of file, url or text', async () => {
+    const {base} = await start();
+    const none = await postJson(base, {});
+    expect(none.status).toBe(400);
+    expect((await errorOf(none)).code).toBe('validation_failed');
+
+    const two = await postJson(base, {text: PROSE, url: 'https://example.com/a'});
+    expect(two.status).toBe(400);
+    expect((await errorOf(two)).details?.[0].message).toMatch(/exactly one/i);
+
+    const form = new FormData();
+    form.append('file', new Blob([Buffer.from(PROSE)]), 'a.txt');
+    form.append('text', PROSE);
+    const fileAndText = await fetch(`${base}/api/extract`, {method: 'POST', body: form});
+    expect(fileAndText.status).toBe(400);
+  });
+
+  it('validates the url field', async () => {
+    const {base} = await start();
+    for (const url of ['not a url', 'ftp://example.com/x', 'file:///etc/passwd']) {
+      const res = await postJson(base, {url});
+      expect(res.status, url).toBe(400);
+      expect((await errorOf(res)).details?.[0].path).toBe('body.url');
+    }
+  });
+
+  it('blocks URLs that point at private addresses (SSRF)', async () => {
+    let hit = false;
+    const internal = await startFixtureServer((_req, res) => {
+      hit = true;
+      res.end('internal secret');
+    });
+    fixtures.push(internal);
+    const {base} = await start();
+    for (const url of [internal.url, `http://localhost:${internal.port}/`, 'http://169.254.169.254/latest/meta-data/']) {
+      const res = await postJson(base, {url});
+      expect(res.status, url).toBe(400);
+      expect((await errorOf(res)).message).toMatch(/private or disallowed/);
+    }
+    expect(hit).toBe(false);
+  });
+
+  it('fetches and extracts a URL when the address guard is relaxed (test only)', async () => {
+    const site = await startFixtureServer((_req, res) => {
+      res.setHeader('Content-Type', 'text/plain');
+      res.end(PROSE);
+    });
+    fixtures.push(site);
+    const {base} = await start({}, {allowPrivateAddresses: true});
+    const res = await postJson(base, {url: `${site.url}/notes.txt`});
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as ExtractionResult;
+    expect(body.source).toMatchObject({kind: 'url', format: 'txt', url: `${site.url}/notes.txt`});
+  });
+
+  it('rejects unsupported and mislabelled files with 415', async () => {
+    const {base} = await start();
+    expect((await upload(base, 'malware.exe', 10)).status).toBe(415);
+    expect((await upload(base, 'evil.pdf', 2048)).status).toBe(415); // zeros, not a PDF
+    expect((await upload(base, 'notes.txt', makePdf([[PROSE]]))).status).toBe(415); // PDF named .txt
   });
 
   it('rejects files above MAX_UPLOAD_MB with 413', async () => {
@@ -175,11 +290,30 @@ describe('uploads', () => {
     expect((await errorOf(res)).code).toBe('payload_too_large');
   });
 
-  it('accepts an allowed file within limits (extraction itself lands in Phase 2)', async () => {
+  it('returns 422 for a corrupted PDF and for text with nothing readable', async () => {
     const {base} = await start();
-    const res = await upload(base, 'notes.pdf', 1024);
-    expect(res.status).toBe(501);
-    expect((await errorOf(res)).message).toMatch(/Phase 2/);
+    const bad = await upload(base, 'bad.pdf', Buffer.from('%PDF-1.4\nnot really a pdf'));
+    expect(bad.status).toBe(422);
+    const empty = await postJson(base, {text: '.......  5'});
+    expect(empty.status).toBe(422);
+  });
+
+  it('has its own, stricter rate limit', async () => {
+    const {base} = await start({EXTRACT_RATE_LIMIT_PER_MINUTE: '2', RATE_LIMIT_PER_MINUTE: '100'});
+    const statuses: number[] = [];
+    for (let i = 0; i < 4; i++) statuses.push((await postJson(base, {text: PROSE})).status);
+    expect(statuses).toEqual([200, 200, 429, 429]);
+    expect((await fetch(`${base}/api/health`)).status).toBe(200);
+  });
+
+  it('logs only metadata, never document text, file names or URLs', async () => {
+    const {base, lines} = await start();
+    await upload(base, 'confidential-thesis-draft.txt', Buffer.from('PRIVATE COURSEWORK SENTENCE about consensus protocols and quorum voting in detail.'));
+    await new Promise((r) => setTimeout(r, 20));
+    const all = lines.join('\n');
+    expect(all).toContain('extract_completed');
+    expect(all).not.toContain('PRIVATE COURSEWORK');
+    expect(all).not.toContain('confidential-thesis-draft');
   });
 });
 

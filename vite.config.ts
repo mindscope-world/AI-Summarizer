@@ -12,6 +12,11 @@ export default defineConfig(() => {
       },
     },
     server: {
+      // Override with CLIENT_PORT when 3000 is taken. strictPort makes a clash fail loudly
+      // instead of silently moving to another port (which could collide with the API).
+      port: Number(process.env.CLIENT_PORT) || 3000,
+      strictPort: true,
+      host: '0.0.0.0',
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
       // Do not modify: file watching is disabled to prevent flickering during agent edits.
       hmr: process.env.DISABLE_HMR !== 'true',

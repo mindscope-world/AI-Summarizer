@@ -116,6 +116,8 @@ export type ApiErrorCode =
   | 'payload_too_large'
   | 'unsupported_media_type'
   | 'rate_limited'
+  | 'unprocessable'
+  | 'upstream_error'
   | 'not_implemented'
   | 'internal_error';
 
@@ -131,4 +133,52 @@ export interface ApiErrorBody {
     requestId: string;
     details?: ApiErrorDetail[];
   };
+}
+
+// ---------------------------------------------------------------------------
+// Ingestion / preprocessing (POST /api/extract)
+// ---------------------------------------------------------------------------
+
+export type SourceFormat = 'pdf' | 'docx' | 'txt' | 'md' | 'html' | 'text';
+
+export interface ExtractionChunk {
+  index: number;
+  /** Character offsets into `ExtractionResult.text` (chunks overlap slightly). */
+  start: number;
+  end: number;
+  tokenEstimate: number;
+}
+
+export interface DetectedLanguage {
+  code: 'en' | 'sw' | 'fr' | 'other' | 'und';
+  /** ISO 639-3 code from the detector when known (e.g. "eng", "swh"). */
+  iso3?: string;
+  name: string;
+  /** Share (0-1) of the sampled text that agreed with `code`. */
+  confidence: number;
+  /** True when a second language makes up a substantial part of the text. */
+  mixed: boolean;
+}
+
+export interface ExtractionResult {
+  /** Cleaned, normalised plain text; paragraphs separated by a blank line. */
+  text: string;
+  wordCount: number;
+  charCount: number;
+  source: {
+    kind: 'file' | 'url' | 'text';
+    format: SourceFormat;
+    fileName?: string;
+    url?: string;
+    title?: string;
+    author?: string;
+    siteName?: string;
+    pageCount?: number;
+    /** True when the text came from OCR because the PDF had no text layer. */
+    ocrUsed: boolean;
+  };
+  language: DetectedLanguage;
+  stats: {paragraphs: number; sentences: number; chunks: number};
+  chunks: ExtractionChunk[];
+  warnings: string[];
 }
