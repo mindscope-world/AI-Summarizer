@@ -21,8 +21,8 @@ import { DocumentSummary, NavigationTab, CommentItem } from './types';
 import { useAuthUser } from './lib/useAuthUser';
 
 export default function App() {
-  // Navigation tab state (Journal is default, matching image.png)
-  const [activeTab, setActiveTab] = useState<NavigationTab>('Journal');
+  // Navigation tab state: the public landing page is what visitors see first.
+  const [activeTab, setActiveTab] = useState<NavigationTab>('Landing');
 
   // Documents state with local persistence
   const [documents, setDocuments] = useState<DocumentSummary[]>(() => {
