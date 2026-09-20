@@ -256,4 +256,83 @@ describe.skipIf(!url)('database schema and Row Level Security', () => {
       ).rejects.toThrow(/row-level security/);
     });
   });
+
+  describe('feedback (ratings)', () => {
+    let faculty: string;
+    let raters: string[];
+
+    const rate = (user: string, doc: string | null, rating: number, extra: {model?: string; params?: object; role?: string} = {}) =>
+      as(
+        user,
+        `insert into feedback (document_id, rating, model, params, role) values ($1, $2, $3, $4, $5)`,
+        [doc, rating, extra.model ?? null, JSON.stringify(extra.params ?? {}), extra.role ?? null],
+      );
+
+    beforeAll(async () => {
+      faculty = await newUser('lecturer@example.edu');
+      await db.query(`update profiles set role = 'faculty' where id = $1`, [faculty]);
+      raters = [await newUser('r1@example.edu'), await newUser('r2@example.edu'), await newUser('r3@example.edu')];
+      // Three people rate "model-a" (4, 5, 3); only two rate "model-b".
+      for (const [i, r] of raters.entries()) {
+        const doc = (await as<{id: string}>(r, `insert into documents (title) values ('d') returning id`)).rows[0].id;
+        await rate(r, doc, [4, 5, 3][i], {model: 'model-a', params: {mode: 'abstractive', length: 'balanced', language: 'English', usedExamples: i === 0}, role: 'student'});
+        if (i < 2) await rate(r, null, 2, {model: 'model-b', params: {mode: 'extractive'}, role: 'student'});
+      }
+    }, 60_000);
+
+    it('lets a person change their rating, but keeps one rating per summary', async () => {
+      const doc = (await as<{id: string}>(alice, `insert into documents (title) values ('rated') returning id`)).rows[0].id;
+      await rate(alice, doc, 2);
+      await expect(rate(alice, doc, 5)).rejects.toThrow(/duplicate key/);
+      const res = await as(alice, `update feedback set rating = 5, comment = 'better on reread' where document_id = $1`, [doc]);
+      expect(res.rowCount).toBe(1);
+      expect((await as(alice, `select rating from feedback where document_id = $1`, [doc])).rows).toEqual([{rating: 5}]);
+    });
+
+    it('does not let another user change or delete a rating', async () => {
+      expect((await as(bob, `update feedback set rating = 1`)).rowCount).toBe(0);
+      expect((await as(bob, `delete from feedback`)).rowCount).toBe(0);
+      const doc = (await as<{id: string}>(alice, `select document_id as id from feedback where comment = 'better on reread'`)).rows[0].id;
+      expect((await as(alice, `select rating from feedback where document_id = $1`, [doc])).rows).toEqual([{rating: 5}]);
+    });
+
+    it('does not let a rating be moved onto someone else’s document', async () => {
+      const own = (await as<{id: string}>(bob, `insert into documents (title) values ('b') returning id`)).rows[0].id;
+      await rate(bob, own, 3);
+      await expect(as(bob, `update feedback set document_id = $1 where document_id = $2`, [aliceDoc, own])).rejects.toThrow(/row-level security/);
+    });
+
+    it('rejects an unknown role or an oversized params blob', async () => {
+      await expect(rate(bob, null, 3, {role: 'admin'})).rejects.toThrow(/check constraint/);
+      await expect(rate(bob, null, 3, {params: {padding: 'x'.repeat(5000)}})).rejects.toThrow(/check constraint/);
+    });
+
+    it('still keeps other people’s ratings and comments private', async () => {
+      expect((await as(bob, `select 1 from feedback where user_id <> $1`, [bob])).rows).toEqual([]);
+      expect((await as(faculty, `select 1 from feedback`)).rows).toEqual([]);
+    });
+
+    it('gives faculty grouped averages across everyone', async () => {
+      const {rows} = await as<{dimension: string; value: string; responses: string; average_rating: string}>(
+        faculty,
+        `select * from feedback_aggregates() where dimension in ('model', 'examples')`,
+      );
+      const byKey = Object.fromEntries(rows.map((r) => [`${r.dimension}:${r.value}`, [Number(r.responses), Number(r.average_rating)]]));
+      expect(byKey['model:model-a']).toEqual([3, 4]);
+      // usedExamples was true for one of the three model-a ratings, so that group is too small to show.
+      expect(byKey['examples:with examples']).toBeUndefined();
+      expect(byKey['examples:without examples']?.[0]).toBeGreaterThanOrEqual(3);
+    });
+
+    it('never reports a group of fewer than three responses', async () => {
+      const {rows} = await as<{value: string}>(faculty, `select value from feedback_aggregates() where dimension = 'model'`);
+      expect(rows.map((r) => r.value)).not.toContain('model-b');
+    });
+
+    it('refuses everyone who is not faculty, including the anonymous role', async () => {
+      await expect(as(alice, `select * from feedback_aggregates()`)).rejects.toThrow(/faculty/);
+      await expect(as(raters[0], `select * from feedback_aggregates()`)).rejects.toThrow(/faculty/);
+      await expect(as(null, `select * from feedback_aggregates()`)).rejects.toThrow(/permission denied/);
+    });
+  });
 });

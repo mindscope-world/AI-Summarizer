@@ -1,9 +1,9 @@
 import {useCallback, useEffect, useState} from 'react';
-import {initialDocuments} from '../data/mockDocuments';
+import {LEGACY_DEMO_IDS} from '../data/legacyDemoIds';
 import type {DocumentSummary} from '../types';
 import {LEGACY_STORAGE_KEY, readLegacyDocuments, upgradeLegacy, type DocumentRepository} from './repository';
 
-const DEMO_IDS: ReadonlySet<string> = new Set(initialDocuments.map((d) => d.id));
+const DEMO_IDS: ReadonlySet<string> = new Set(LEGACY_DEMO_IDS);
 const dismissedKey = (userId: string) => `leaderforge_legacy_import_dismissed:${userId}`;
 
 const safe = <T,>(fn: () => T, fallback: T): T => {

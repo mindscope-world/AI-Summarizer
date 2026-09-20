@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useModal } from '../lib/useModal';
 import { X, Send, MessageSquare, Trash2 } from 'lucide-react';
 import { CommentItem } from '../types';
 
@@ -19,6 +20,8 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
 }) => {
   const [newComment, setNewComment] = useState('');
 
+  const panelRef = useModal<HTMLDivElement>(isOpen, onClose);
+
   if (!isOpen) return null;
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -29,18 +32,26 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
   };
 
   return (
-    <div className="fixed inset-y-0 right-0 z-50 w-full sm:w-80 lg:w-96 bg-white shadow-2xl border-l border-slate-200 flex flex-col animate-in slide-in-from-right duration-200">
+    <div
+      ref={panelRef}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="comments-title"
+      tabIndex={-1}
+      className="fixed inset-y-0 right-0 z-50 w-full sm:w-80 lg:w-96 bg-white shadow-2xl border-l border-slate-200 flex flex-col animate-in slide-in-from-right duration-200 outline-hidden"
+    >
       
       {/* Header */}
       <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
         <div className="flex items-center gap-2">
           <MessageSquare className="w-4 h-4 text-emerald-600" />
-          <h3 className="font-bold text-slate-900 text-xs sm:text-sm">
-            Comments & Supervisor Feedback ({comments.length})
+          <h3 id="comments-title" className="font-bold text-slate-900 text-xs sm:text-sm">
+            Comments ({comments.length})
           </h3>
         </div>
         <button
           onClick={onClose}
+          aria-label="Close comments"
           className="p-1 rounded-lg hover:bg-slate-200 text-slate-400 hover:text-slate-700 transition-colors"
         >
           <X className="w-4 h-4" />

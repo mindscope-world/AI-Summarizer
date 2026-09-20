@@ -11,6 +11,18 @@ export default defineConfig(() => {
         '@': path.resolve(__dirname, '.'),
       },
     },
+    build: {
+      rollupOptions: {
+        output: {
+          // Libraries change rarely, the app's own code often: separate files keep the libraries cached across deploys.
+          manualChunks(id: string) {
+            if (id.includes('node_modules/@supabase')) return 'supabase';
+            if (/node_modules\/(react|react-dom|scheduler)\//.test(id)) return 'react';
+            return undefined;
+          },
+        },
+      },
+    },
     server: {
       // Override with CLIENT_PORT when 3000 is taken. strictPort makes a clash fail loudly
       // instead of silently moving to another port (which could collide with the API).

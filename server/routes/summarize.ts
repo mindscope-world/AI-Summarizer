@@ -20,6 +20,11 @@ export const summarizeBody = z.object({
   language: z.enum(['English', 'Swahili']).default('English'),
   /** Language code from /api/extract; lets the grounding check know whether names can be compared. */
   sourceLanguage: z.enum(['en', 'sw', 'fr', 'other', 'und']).optional(),
+  /** The student's own well-rated summaries, as style references. A few short ones at most. */
+  examples: z
+    .array(z.object({title: z.string().trim().max(300), text: z.string().trim().min(1).max(2_000)}))
+    .max(2)
+    .default([]),
 });
 
 interface Deps {
@@ -86,6 +91,7 @@ export function createSummarizeRouter({env, logger, llm}: Deps): Router {
             length: body.length,
             language: body.language,
             sourceLanguage: body.sourceLanguage,
+            examples: body.examples,
           },
           {
             llm,
@@ -105,6 +111,7 @@ export function createSummarizeRouter({env, logger, llm}: Deps): Router {
           language: result.metadata.language,
           words: result.metadata.originalWordCount,
           sections: result.metadata.sections,
+          examples: result.metadata.examplesUsed,
           warnings: result.warnings.length,
           durationMs: Date.now() - started,
         });

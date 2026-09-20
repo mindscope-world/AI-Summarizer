@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { StrictMode } from 'react';
+import { StrictMode, type ComponentProps } from 'react';
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -47,6 +47,7 @@ const makeSummary = (over: Partial<SummaryResult> = {}): SummaryResult => ({
     reductionRate: '95%',
     sections: 1,
     processingSeconds: 3.2,
+    examplesUsed: 0,
   },
   warnings: [],
   ...over,
@@ -64,12 +65,12 @@ const makeResult = (over: Partial<ExtractionResult> = {}): ExtractionResult => (
   ...over,
 });
 
-const setup = () => {
+const setup = (props: Partial<ComponentProps<typeof NewSummaryModal>> = {}) => {
   const onCreated = vi.fn<(doc: DocumentSummary, options?: { originalFile?: File | null }) => void>();
   const onClose = vi.fn();
   // applyAccept:false so the component's own validation is what we exercise
   const user = userEvent.setup({ applyAccept: false, advanceTimers: (ms) => vi.advanceTimersByTime(ms) });
-  const utils = render(<NewSummaryModal isOpen onClose={onClose} onCreated={onCreated} />);
+  const utils = render(<NewSummaryModal isOpen onClose={onClose} onCreated={onCreated} {...props} />);
   const fileInput = () => utils.container.querySelector<HTMLInputElement>('#document-file-input')!;
   const startButton = () => screen.getByRole('button', { name: /start ai summarization/i });
   /** The extraction result card (the file name also shows in the dropzone, so query the card itself). */
@@ -393,7 +394,7 @@ describe('NewSummaryModal: pasted text and creating the document', () => {
     expect(doc.summaryWarnings).toEqual(['Check these figures: 34%.']);
     expect(doc.sourceMetadata).toMatchObject({ modelUsed: 'qwen/qwen3.8-27b', summaryWordCount: 61, reductionRate: '95%', processingTime: '3.2s' });
     // Nothing invented: the old hard-coded quality claims are gone.
-    expect(doc.sourceMetadata?.rougeScores).toBeUndefined();
+    expect(doc.sourceMetadata).not.toHaveProperty('rougeScores');
     expect(JSON.stringify(doc)).not.toMatch(/BERT|ROUGE metrics/);
   });
 
@@ -451,3 +452,43 @@ describe('NewSummaryModal: pasted text and creating the document', () => {
   });
 });
 
+describe('NewSummaryModal: style examples from the student’s rated summaries', () => {
+  const startWithText = async (t: ReturnType<typeof setup>) => {
+    extractDocument.mockResolvedValue(makeResult({ source: { kind: 'text', format: 'text', ocrUsed: false } }));
+    await t.user.click(screen.getByRole('button', { name: /paste text/i }));
+    await t.user.type(screen.getByPlaceholderText(/paste full text/i), 'some notes');
+    await t.user.click(t.startButton());
+  };
+
+  it('asks for examples in the chosen subject and language, sends them, and records how many were used', async () => {
+    const getExamples = vi.fn().mockResolvedValue([{ title: 'Earlier', text: 'A good summary.' }]);
+    summarizeDocument.mockResolvedValue({ ...makeSummary(), metadata: { ...makeSummary().metadata, examplesUsed: 1 } });
+    const t = setup({ getExamples });
+    await startWithText(t);
+
+    await waitFor(() => expect(t.onCreated).toHaveBeenCalledTimes(1));
+    expect(getExamples).toHaveBeenCalledWith('Computer Science', 'English');
+    expect(summarizeDocument.mock.calls[0][0].examples).toEqual([{ title: 'Earlier', text: 'A good summary.' }]);
+    expect(t.onCreated.mock.calls[0][0].sourceMetadata).toMatchObject({ examplesUsed: 1, summaryLength: 'balanced', summaryMode: 'abstractive' });
+  });
+
+  it('still summarises, without examples, when they cannot be loaded', async () => {
+    const getExamples = vi.fn().mockRejectedValue(new Error('offline'));
+    const t = setup({ getExamples });
+    await startWithText(t);
+
+    await waitFor(() => expect(t.onCreated).toHaveBeenCalledTimes(1));
+    expect(summarizeDocument.mock.calls[0][0].examples).toEqual([]);
+  });
+
+  it('does not ask for examples in extractive mode, which writes no prose', async () => {
+    const getExamples = vi.fn().mockResolvedValue([{ title: 'Earlier', text: 'x' }]);
+    const t = setup({ getExamples });
+    await t.user.selectOptions(screen.getByDisplayValue(/abstractive/i), 'extractive');
+    await startWithText(t);
+
+    await waitFor(() => expect(t.onCreated).toHaveBeenCalledTimes(1));
+    expect(getExamples).not.toHaveBeenCalled();
+    expect(summarizeDocument.mock.calls[0][0]).toMatchObject({ summarizationType: 'extractive', examples: [] });
+  });
+});

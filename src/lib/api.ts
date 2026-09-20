@@ -6,9 +6,12 @@ import type {
   ExportDocument,
   ExportFormat,
   ExtractionResult,
+  GeneratedQuestion,
   HealthResponse,
+  QuestionRequest,
   SummarizeEvent,
   SummarizeProgress,
+  SummaryExample,
   SummaryLanguage,
   SummaryLength,
   SummaryMode,
@@ -220,6 +223,8 @@ export interface SummarizeInput {
   language: SummaryLanguage;
   /** Language code reported by /api/extract. */
   sourceLanguage?: DetectedLanguage['code'];
+  /** The student's own well-rated summaries, sent as style references. */
+  examples?: SummaryExample[];
 }
 
 /** A long document on a free-tier rate limit can take several minutes; progress events keep the user informed. */
@@ -381,6 +386,16 @@ export function translateSummary(
   options: Pick<RequestOptions, 'signal' | 'timeoutMs' | 'baseUrl'> = {},
 ): Promise<TranslateResponse> {
   return apiRequest<TranslateResponse>('/translate', {method: 'POST', body: input, timeoutMs: TRANSLATE_TIMEOUT_MS, ...options});
+}
+
+const QUESTION_TIMEOUT_MS = 90_000;
+
+/** One new revision question for a summary, different from the ones it already has. */
+export function generateQuestion(
+  input: QuestionRequest,
+  options: Pick<RequestOptions, 'signal' | 'timeoutMs' | 'baseUrl'> = {},
+): Promise<GeneratedQuestion> {
+  return apiRequest<GeneratedQuestion>('/questions', {method: 'POST', body: input, timeoutMs: QUESTION_TIMEOUT_MS, ...options});
 }
 
 export function describeApiError(err: unknown): string {

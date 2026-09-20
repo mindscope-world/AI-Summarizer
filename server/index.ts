@@ -29,3 +29,12 @@ function shutdown(signal: string) {
 }
 process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));
+
+// Anything that escapes a request handler is a bug: record it (so it shows up in the platform's error
+// monitoring, which reads these JSON lines) and exit, so the orchestrator starts a clean process.
+function fatal(kind: string, err: unknown) {
+  logger.error(kind, {error: err instanceof Error ? {name: err.name, message: err.message, stack: err.stack} : String(err)});
+  process.exit(1);
+}
+process.on('uncaughtException', (err) => fatal('uncaught_exception', err));
+process.on('unhandledRejection', (reason) => fatal('unhandled_rejection', reason));

@@ -26,11 +26,11 @@ export interface SourceMetadata {
   modelUsed?: string;
   processingTime?: string;
   language?: string;
-  rougeScores?: {
-    rouge1: number;
-    rouge2: number;
-    rougeL: number;
-  };
+  /** Length and mode the summary was made with (recorded so ratings can be analysed by them). */
+  summaryLength?: SummaryLength;
+  summaryMode?: SummaryMode;
+  /** How many of the student's own well-rated summaries were shown to the model as style examples. */
+  examplesUsed?: number;
 }
 
 export interface ReviewMilestoneTask {
@@ -130,7 +130,6 @@ export type ApiErrorCode =
   | 'rate_limited'
   | 'unprocessable'
   | 'upstream_error'
-  | 'not_implemented'
   | 'service_unavailable'
   | 'internal_error';
 
@@ -227,6 +226,8 @@ export interface SummaryResult {
     /** How many sections a long document was split into (1 = summarised in one go). */
     sections: number;
     processingSeconds: number;
+    /** How many style examples from the student's own well-rated summaries went into the prompt. */
+    examplesUsed: number;
   };
   /** Things the reader should double-check (ungrounded figures, degraded features). */
   warnings: string[];
@@ -250,6 +251,67 @@ export type SummarizeEvent =
 export interface GeneratedQuestion {
   question: string;
   context: string;
+}
+
+/** An earlier summary the student rated highly, sent along so the model can match its style (never its facts). */
+export interface SummaryExample {
+  title: string;
+  text: string;
+}
+
+/** POST /api/questions: one more revision question for a summary, different from the ones it has. */
+export interface QuestionRequest {
+  title: string;
+  language: SummaryLanguage;
+  contentParagraphs: string[];
+  bulletPoints: {title: string; text: string}[];
+  existingQuestions: string[];
+}
+
+// ---------------------------------------------------------------------------
+// Feedback (ratings stored in `feedback`, read back for the Metrics tab)
+// ---------------------------------------------------------------------------
+
+export type FeedbackRole = 'student' | 'researcher' | 'faculty';
+
+/** What was true about the summary when it was rated; stored with the rating so results can be analysed by it. */
+export interface FeedbackParams {
+  mode?: SummaryMode;
+  length?: SummaryLength;
+  language?: string;
+  category?: string;
+  usedExamples?: boolean;
+}
+
+export interface FeedbackInput {
+  documentId: string;
+  rating: number;
+  comment: string;
+  /** The student allows this summary to be used as an example to improve future results. */
+  consent: boolean;
+  role: FeedbackRole;
+  model?: string;
+  params: FeedbackParams;
+}
+
+export interface FeedbackEntry {
+  id: string;
+  documentId: string | null;
+  rating: number;
+  comment: string;
+  consent: boolean;
+  model?: string;
+  params: FeedbackParams;
+  role?: FeedbackRole;
+  createdAt: string;
+}
+
+/** One row of the faculty-only report: an average over every user's ratings, for one group. */
+export interface FeedbackAggregate {
+  dimension: 'all' | 'model' | 'mode' | 'length' | 'language' | 'role' | 'examples';
+  value: string;
+  responses: number;
+  averageRating: number;
 }
 
 // ---------------------------------------------------------------------------

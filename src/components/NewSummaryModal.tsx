@@ -13,7 +13,8 @@ import {
   AlertCircle,
   Trash2,
 } from 'lucide-react';
-import { DocumentSummary, ExtractionResult, SourceMetadata, SummarizeProgress, SummaryResult } from '../types';
+import { useModal } from '../lib/useModal';
+import { DocumentSummary, ExtractionResult, SourceMetadata, SummarizeProgress, SummaryExample, SummaryResult } from '../types';
 import { cn } from '../lib/utils';
 import { useAuthUser } from '../lib/useAuthUser';
 import { newId, dateBadge, timeAgoGroup, formatCreated } from '../lib/repository';
@@ -23,6 +24,8 @@ interface NewSummaryModalProps {
   isOpen: boolean;
   onClose: () => void;
   onCreated: (newDoc: DocumentSummary, options?: { originalFile?: File | null }) => void;
+  /** The student's own well-rated summaries in this category and language, used as style examples. Optional and best-effort. */
+  getExamples?: (category: string, language: string) => Promise<SummaryExample[]>;
 }
 
 type SourceTab = 'upload' | 'url' | 'paste' | 'library';
@@ -156,6 +159,7 @@ export const NewSummaryModal: React.FC<NewSummaryModalProps> = ({
   isOpen,
   onClose,
   onCreated,
+  getExamples,
 }) => {
   const authUser = useAuthUser();
   const [sourceType, setSourceType] = useState<SourceTab>('upload');
@@ -327,6 +331,8 @@ export const NewSummaryModal: React.FC<NewSummaryModalProps> = ({
     setProgress({ stage: 'prepare', message: 'Sending the document to the summarizer', percent: 1 });
     setIsProcessing(true);
     try {
+      // Style examples are a nice-to-have: if they cannot be loaded, summarise without them.
+      const examples = mode === 'abstractive' && getExamples ? await getExamples(category, language).catch(() => []) : [];
       const summary = await summarizeDocument(
         {
           text: result.text,
@@ -336,6 +342,7 @@ export const NewSummaryModal: React.FC<NewSummaryModalProps> = ({
           length: summaryLength,
           language,
           sourceLanguage: result.language.code,
+          examples,
         },
         { signal: controller.signal, onProgress: setProgress },
       );
@@ -408,6 +415,9 @@ export const NewSummaryModal: React.FC<NewSummaryModalProps> = ({
         modelUsed: summary.metadata.model,
         processingTime: `${summary.metadata.processingSeconds}s`,
         language: summary.metadata.language,
+        summaryLength: summary.metadata.length,
+        summaryMode: summary.metadata.mode,
+        examplesUsed: summary.metadata.examplesUsed,
       },
     };
 
@@ -415,6 +425,8 @@ export const NewSummaryModal: React.FC<NewSummaryModalProps> = ({
     resetForm();
     onClose();
   };
+
+  const panelRef = useModal<HTMLDivElement>(isOpen, handleClose);
 
   if (!isOpen) return null;
 
@@ -434,7 +446,12 @@ export const NewSummaryModal: React.FC<NewSummaryModalProps> = ({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs animate-in fade-in">
       <div
-        className="bg-white rounded-3xl shadow-2xl border border-slate-200/80 w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh]"
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="new-summary-title"
+        tabIndex={-1}
+        className="bg-white rounded-3xl shadow-2xl border border-slate-200/80 w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh] outline-hidden"
         onClick={(e) => e.stopPropagation()}
       >
 
@@ -445,7 +462,7 @@ export const NewSummaryModal: React.FC<NewSummaryModalProps> = ({
               <Sparkles className="w-4 h-4" />
             </div>
             <div>
-              <h3 className="font-bold text-slate-900 text-sm">New Academic Reflection & Summarization</h3>
+              <h3 id="new-summary-title" className="font-bold text-slate-900 text-sm">New Academic Reflection & Summarization</h3>
               <p className="text-[11px] text-slate-500">
                 East Africa University • AI Summarization
               </p>
@@ -805,7 +822,12 @@ export const NewSummaryModal: React.FC<NewSummaryModalProps> = ({
 
         {/* Footer */}
         {!isProcessing && (
-          <div className="p-4 border-t border-slate-100 bg-slate-50/50 flex items-center justify-between">
+          <p id="data-use-notice" className="px-5 pt-3 text-[10px] leading-snug text-slate-500 border-t border-slate-100 bg-slate-50/50">
+            To write the summary, the text of your document is sent to an AI service (Groq). Only summarise material you are allowed to share with a third party.
+          </p>
+        )}
+        {!isProcessing && (
+          <div className="p-4 pt-2 bg-slate-50/50 flex items-center justify-between">
             <button
               onClick={handleClose}
               className="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-800 rounded-xl hover:bg-slate-100"

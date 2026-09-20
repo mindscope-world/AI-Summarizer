@@ -5,10 +5,7 @@ import {
   SquarePen, 
   CalendarDays, 
   BarChart3, 
-  Search, 
   Settings, 
-  MessageSquare, 
-  Bell, 
   Sparkles,
   Layers,
   GraduationCap
@@ -19,8 +16,6 @@ import { useAuthUser } from '../lib/useAuthUser';
 interface NavbarProps {
   activeTab: NavigationTab;
   onTabChange: (tab: NavigationTab) => void;
-  searchQuery: string;
-  onSearchChange: (query: string) => void;
   onOpenArchitecture: () => void;
   onOpenSettings: () => void;
   onSignOut: () => void;
@@ -29,15 +24,12 @@ interface NavbarProps {
 export const Navbar: React.FC<NavbarProps> = ({
   activeTab,
   onTabChange,
-  searchQuery,
-  onSearchChange,
   onOpenArchitecture,
   onOpenSettings,
   onSignOut,
 }) => {
   const authUser = useAuthUser();
   const [showProfileMenu, setShowProfileMenu] = React.useState(false);
-  const [showNotifications, setShowNotifications] = React.useState(false);
 
   const navItems: { id: NavigationTab; label: string; icon: React.FC<{ className?: string }> }[] = [
     { id: 'Landing', label: 'Overview', icon: Sparkles },
@@ -102,20 +94,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           </nav>
         </div>
 
-        {/* Center: Search pill matching image.png */}
-        <div className="flex-1 max-w-md mx-2 hidden sm:block">
-          <div className="relative flex items-center">
-            <Search className="w-4 h-4 text-slate-400 absolute left-3.5 pointer-events-none" />
-            <input
-              type="text"
-              id="global-search-input"
-              value={searchQuery}
-              onChange={(e) => onSearchChange(e.target.value)}
-              placeholder="Search..."
-              className="w-full pl-9.5 pr-4 py-1.5 text-xs bg-slate-100/70 hover:bg-slate-100 focus:bg-white border border-slate-200/60 focus:border-slate-300 rounded-full outline-none transition-all placeholder:text-slate-400 text-slate-700"
-            />
-          </div>
-        </div>
+        <div className="flex-1" />
 
         {/* Right Controls matching image.png */}
         <div className="flex items-center gap-2">
@@ -134,7 +113,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           <button
             id="view-architecture-btn"
             onClick={onOpenArchitecture}
-            title="View 6-Stage System Architecture"
+            title="How the summarizer works"
             className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:text-emerald-700 bg-emerald-50/70 hover:bg-emerald-100/70 border border-emerald-200/60 rounded-lg transition-colors"
           >
             <Layers className="w-3.5 h-3.5 text-emerald-600" />
@@ -145,53 +124,11 @@ export const Navbar: React.FC<NavbarProps> = ({
           <button
             id="settings-modal-btn"
             onClick={onOpenSettings}
-            title="System Settings"
+            title="Settings"
             className="w-8 h-8 rounded-full flex items-center justify-center text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition-colors border border-transparent hover:border-slate-200"
           >
             <Settings className="w-4 h-4" />
           </button>
-
-          {/* Chat / Support bubble */}
-          <button
-            id="feedback-help-btn"
-            onClick={onOpenArchitecture}
-            title="Academic Help & Project Specs"
-            className="w-8 h-8 rounded-full flex items-center justify-center text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition-colors relative"
-          >
-            <MessageSquare className="w-4 h-4" />
-            <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full absolute top-1.5 right-1.5" />
-          </button>
-
-          {/* Notifications Icon with badge */}
-          <div className="relative">
-            <button
-              id="notifications-btn"
-              onClick={() => setShowNotifications(!showNotifications)}
-              title="Notifications"
-              className="w-8 h-8 rounded-full flex items-center justify-center text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition-colors"
-            >
-              <Bell className="w-4 h-4" />
-            </button>
-
-            {showNotifications && (
-              <div className="absolute right-0 mt-2 w-72 bg-white rounded-xl shadow-lg border border-slate-200 p-3 z-50 animate-in fade-in zoom-in-95">
-                <div className="flex items-center justify-between pb-2 border-b border-slate-100 mb-2">
-                  <span className="text-xs font-semibold text-slate-800">Notifications</span>
-                  <span className="text-[10px] text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded font-medium">3 New</span>
-                </div>
-                <div className="space-y-2 text-xs">
-                  <div className="p-2 bg-slate-50 rounded-lg">
-                    <p className="font-medium text-slate-800">BERT Preprocessing Complete</p>
-                    <p className="text-slate-500 text-[11px]">BCSITP/0003/S24 coursework indexed in 1.4s.</p>
-                  </div>
-                  <div className="p-2 hover:bg-slate-50 rounded-lg">
-                    <p className="font-medium text-slate-800">New Supervisor Feedback</p>
-                    <p className="text-slate-500 text-[11px]">Mr. Geoffrey Sagwe reviewed your methodology summary.</p>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
 
           {/* User Profile Avatar with dropdown matching image.png */}
           <div className="relative ml-1">
@@ -238,7 +175,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                     }}
                     className="text-left px-2.5 py-1.5 text-slate-600 hover:bg-slate-50 rounded-lg"
                   >
-                    Account & Preferences
+                    Settings
                   </button>
                   <button
                     onClick={() => {

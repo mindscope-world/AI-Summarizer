@@ -19,7 +19,9 @@
     "lint": "tsc --noEmit",
     "test": "vitest run",
     "verify:bundle": "node scripts/check-bundle-secrets.mjs",
-    "test:rls": "bash scripts/test-rls.sh"
+    "test:rls": "bash scripts/test-rls.sh",
+    "eval": "tsx scripts/eval/run.ts",
+    "smoke": "node scripts/smoke.mjs"
   },
   "dependencies": {
     "@langchain/core": "^1.2.11",

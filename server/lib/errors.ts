@@ -27,8 +27,6 @@ export const notFound = (message = 'Resource not found.') => new AppError(404, '
 export const unprocessable = (message: string) => new AppError(422, 'unprocessable', message);
 /** 502: a remote resource (a URL the user gave us, or an AI provider) failed. */
 export const upstreamError = (message: string) => new AppError(502, 'upstream_error', message);
-export const notImplemented = (feature: string, phase: number) =>
-  new AppError(501, 'not_implemented', `${feature} is not implemented yet (planned for Phase ${phase}).`);
 
 /** Terminal handler for unknown /api routes. */
 export const apiNotFound: RequestHandler = (req, _res, next) => {

@@ -1,12 +1,17 @@
 # LeaderForge Academic Summarizer
 
-AI-assisted summarization of university academic materials (lecture notes, papers, e-books, web articles) for The East Africa University. React + Vite frontend, Express + TypeScript backend.
+AI-assisted summarization of university academic materials (lecture notes, papers, e-books, web articles) for The East Africa University. Students upload a file, paste a link or text, and get a structured study summary (in English or Kiswahili) with key points and discussion questions, plus translation, export and a review schedule. React + Vite frontend, Express + TypeScript backend, Supabase for sign-in and storage, open-weights models on Groq through LangChain.
 
-> **Status: work in progress.** `plan.md` is the roadmap.
->
-> | Working | Not yet (still simulated or `501 not_implemented`) |
-> |---|---|
-> | Document ingestion and preprocessing: `GET /api/health`, `POST /api/extract` (PDF, DOCX, TXT/MD, web article URL, pasted text; OCR fallback for scanned PDFs; cleaning; language detection; sentence/chunk segmentation) | AI summarization (the summary body, ROUGE numbers and "BERT/T5" labels in the UI are still placeholders), persistence and real auth, PDF/DOCX export, feedback loop |
+| | |
+|---|---|
+| **Summaries** | abstractive (a model writes it) or extractive (key sentences quoted from the source); concise, balanced or detailed; long documents read in sections; figures not found in the source are flagged |
+| **Inputs** | PDF, DOCX, TXT, Markdown, web article links, pasted text; scanned PDFs are read with a vision model |
+| **Study tools** | discussion questions (and a new one on request), English-Kiswahili translation, 1-3-7-30 day review schedule, notes and comments |
+| **Export** | PDF, Word, plain text, Markdown |
+| **Accounts** | Supabase Auth; every student's data is private to them (Row Level Security); faculty see averaged ratings only |
+| **Feedback** | 1-5 ratings per summary, personal Metrics tab, faculty aggregates, own well-rated summaries reused as style examples, offline ROUGE benchmark |
+
+Documentation: [`docs/API.md`](docs/API.md) (endpoints), [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) (how it fits together), [`docs/RUNBOOK.md`](docs/RUNBOOK.md) (deploy and operate), [`docs/PRIVACY.md`](docs/PRIVACY.md) (what happens to data), [`docs/DEMO.md`](docs/DEMO.md) (presentation script; sample texts in `docs/samples/`), [`plan.md`](plan.md) (roadmap and what is still open).
 
 ## Requirements
 
@@ -38,9 +43,12 @@ CLIENT_PORT=3100 npm run dev
 | `npm run dev` | API (`tsx watch`) and Vite together |
 | `npm run dev:server` / `dev:client` | Either half on its own |
 | `npm run lint` | Type-check the whole project (`tsc --noEmit`) |
-| `npm test` | Vitest: server (env, middleware, routes, ingestion pipeline, SSRF guard) and client (`src/lib/api`, the new-summary modal in jsdom) |
+| `npm test` | Vitest: server (env, middleware, routes, pipeline, SSRF and zip guards, export, evaluation) and client (api, repositories, hooks, components in jsdom). Database tests are skipped here |
+| `npm run test:rls` | Schema, Row Level Security and the data layer against disposable Postgres + PostgREST containers (needs Docker) |
 | `npm run build` | `vite build` to `dist/`, and bundle the server to `server.js` |
 | `npm start` | Production: `node server.js`, serving the API and `dist/` on one port |
+| `npm run smoke` | Checks a running server (`SMOKE_URL`, optional `SMOKE_TOKEN`, `SMOKE_SUMMARIZE=1`); see `docs/RUNBOOK.md` |
+| `npm run eval` | Offline ROUGE benchmark on the human-written references in `scripts/eval/gold/`; writes `src/data/benchmark.json` |
 | `npm run verify:bundle` | Fails if `dist/` contains secret values, server-only setting names or a `gsk_...` key |
 | `npm run clean` | Remove `dist/` and `server.js` |
 
@@ -64,12 +72,13 @@ All variables except the two public `VITE_SUPABASE_*` ones are read by the serve
 | `PORT` | `3001` | API port (Cloud Run injects this) |
 | `NODE_ENV` | `development` | `development`, `production` or `test` |
 | `APP_URL` | unset | Public URL of the deployment |
+| `LLM_TPM`, `LLM_MAX_CONCURRENT`, `SUMMARY_CHUNK_TOKENS`, `SUMMARY_MAX_CHUNKS`, `SUMMARIZE_RATE_LIMIT_PER_MINUTE` | see `.env.example` | Token budget, concurrency, section size and per-user limit for model calls |
 | `MAX_UPLOAD_MB` | `50` | Max uploaded document size |
 | `JSON_BODY_LIMIT` | `2mb` | Max JSON body |
 | `RATE_LIMIT_PER_MINUTE` | `60` | Per user (per IP while signed out); `/health` is exempt |
 | `CORS_ORIGINS` | empty | Comma-separated allowed cross-origin callers; empty means same-origin only |
 | `TRUST_PROXY` | `0` | Reverse-proxy hops (Cloud Run = `1`) so rate limiting sees client IPs |
-| `EXTRACT_RATE_LIMIT_PER_MINUTE` | `20` | Stricter limit for `POST /api/extract` |
+| `EXTRACT_RATE_LIMIT_PER_MINUTE` | `20` | Stricter limit for `POST /api/extract` and `POST /api/export` |
 | `MAX_PDF_PAGES` | `500` | Refuse PDFs with more pages |
 | `MAX_EXTRACTED_CHARS` | `3000000` | Refuse documents with more text than this |
 | `URL_FETCH_TIMEOUT_MS` | `15000` | Total time allowed to fetch a URL |
@@ -79,20 +88,26 @@ All variables except the two public `VITE_SUPABASE_*` ones are read by the serve
 ## Architecture
 
 ```
-src/                    React app (Vite, Tailwind 4)
-  lib/api.ts            typed fetch wrapper: base URL, timeouts, ApiError
+src/                    React app (Vite, Tailwind 4); each screen is its own lazily loaded chunk
+  lib/                  api client, auth, repositories (documents, feedback), hooks, metrics
+  components/           screens and dialogs
+  data/benchmark.json   written by `npm run eval`
   types.ts              domain types + API contract shared with the server
 server/
-  index.ts              entrypoint: env, logger, listen, graceful shutdown
+  index.ts              entrypoint: env, logger, listen, graceful shutdown, fatal-error logging
   app.ts                middleware stack + route mounting + static hosting
-  ai/                   LangChain chat-model factory (the only place a vendor SDK is imported)
-  lib/                  env (zod), logger, errors, meta
-  middleware/           requestId, accessLog, rateLimit, validate (zod), upload (multer)
-  routes/               health, extract, summarize, documents, feedback, export
+  ai/                   model gateway (LangChain, the only vendor import), summarize, translate, questions, TextRank, grounding
+  eval/                 ROUGE and the benchmark
+  export/               PDF / DOCX / TXT / MD builders
+  lib/, middleware/     env (zod), logger, errors; auth, rate limits, security headers, upload, validation
+  routes/               health, extract, summarize, translate, questions, export
   pipeline/             ingestion + preprocessing (see below)
-  testing/              PDF/DOCX builders and a fixture HTTP server for tests
-scripts/                build-time checks
+supabase/               migrations and the database tests
+scripts/                bundle-secret check, smoke test, RLS test runner, eval
+docs/                   API, architecture, runbook, privacy, demo
 ```
+
+See `docs/ARCHITECTURE.md` for the two trust zones (the server has no database access; the browser talks to Supabase under Row Level Security).
 
 ## Document ingestion (`POST /api/extract`)
 
@@ -121,7 +136,7 @@ Behaviour worth knowing:
 - **Language** is `und` (undetermined) rather than a guess when there is no running prose to judge by, and `mixed` is only reported between supported languages (English, Swahili, French).
 - Documents are processed in memory and never written to disk. Logs contain metadata only.
 
-Known limits: multi-column PDF layouts are read in the order pdf.js provides (columns can interleave); tables become plain lines; legacy `.doc`, images and PDFs over 18 MB needing OCR are not supported; DOCX archives are not yet inspected for decompression bombs (Phase 7).
+Known limits: multi-column PDF layouts are read in the order pdf.js provides (columns can interleave); tables become plain lines; legacy `.doc`, images and PDFs over 18 MB needing OCR are not supported. DOCX archives that declare an absurd uncompressed size or part count are refused before opening (`server/pipeline/zipGuard.ts`); an archive that lies about its sizes is only caught after the fact, so the upload limit and the memory of the host are the backstop.
 
 ## Export (`POST /api/export`)
 
@@ -143,7 +158,7 @@ Translates a structured summary between English and Swahili with the same open-w
 
 ## Request flow
 
-`requestId` -> `accessLog` -> security headers -> CORS -> rate limit -> JSON parse -> route (`validate` first) -> `errorHandler`.
+`requestId` -> `accessLog` -> security headers -> CORS -> auth -> rate limit -> JSON parse -> route (`validate` first) -> `errorHandler`.
 
 Every error is returned in one shape (`ApiErrorBody` in `src/types.ts`):
 
@@ -158,12 +173,22 @@ The target pipeline follows the 6-stage workflow in the project documentation: i
 ## Security notes
 
 - The Groq key lives only in the server process (in a git-ignored `.env`). `npm run verify:bundle` runs in CI to prove it never reaches the client bundle.
-- Sign-in is real Supabase Auth (email/password, magic link, Google). The server verifies the Supabase access token on every `/api` route except `/api/health` (`server/middleware/auth.ts`), accepts only user sessions (not the public anon key), and takes the audience, issuer and algorithm from configuration, never from the token.
-- Each student's data is isolated by Row Level Security on every table and on the private `uploads` storage bucket (`supabase/migrations`). Roles live in `profiles.role`; a user cannot change their own, and sign-up cannot request `faculty`. There is no sharing model yet, so no role can read another user's documents.
-- The workspace is unreachable while signed out; the UI shows only the Landing page. Summaries saved in `localStorage` before accounts existed are offered for a one-time import into the signed-in account.
-- `npm run test:rls` runs the schema and isolation tests against disposable Postgres and PostgREST containers (needs Docker), including that two accounts cannot see or modify each other's rows or files.
-- Accounts in `DEMO_CAMPUS_ACCOUNTS` are fictional (`*.example` addresses).
+- Sign-in is real Supabase Auth (email/password, magic link, Google). The server verifies the access token on every `/api` route except `/api/health`, accepts only user sessions (not the public anon key), and takes the audience, issuer and algorithm from configuration, never from the token.
+- Each student's data is isolated by Row Level Security on every table and on the private `uploads` bucket. Roles live in `profiles.role`; a user cannot change their own, and sign-up cannot request `faculty`. There is no sharing model: no role can read another user's documents. The one cross-user query is `feedback_aggregates()`, faculty-only, averages only, groups of fewer than 3 hidden.
+- Web responses carry a Content-Security-Policy (scripts from our own origin only; connections only to this server and the Supabase project), `X-Frame-Options: DENY`, `nosniff`, a Permissions-Policy, and HSTS in production. API responses are `no-store`.
+- Uploads: extension and content must agree; size, page and character limits; DOCX archive size guard; files are processed in memory and never written to disk. URL fetching blocks private, loopback, link-local and metadata addresses, including after DNS resolution and redirects.
+- Untrusted text (documents, example summaries) is fenced in delimiters and the models are told to ignore instructions inside it; the models have no tools and their output is schema-validated.
+- CPU- and model-heavy routes have their own per-user rate limits; only a few summarizations run at once; closing the connection cancels model calls.
+- Logs contain metadata only. Unhandled errors are logged and the process exits so the platform restarts it.
+- `npm audit` reports no known vulnerabilities at the time of writing; CI does not enforce it yet.
+- `npm run test:rls` proves that two accounts cannot see or modify each other's rows or files, and that only faculty can call the aggregate function.
+
+Not covered: the app has not been through an external penetration test; the CSP has been checked against the built page's structure but not exercised in every browser; sign-in flows (Google OAuth, email confirmation) need a real Supabase project to verify.
+
+## Deploy
+
+`Dockerfile` builds the web app and the server into one image (non-root, health check). `docs/RUNBOOK.md` has the steps, the settings each environment needs, logging and alerting, and troubleshooting.
 
 ## CI
 
-`.github/workflows/ci.yml` runs type-check, tests, build and the bundle-secret check on every push to `main` and every pull request.
+`.github/workflows/ci.yml` runs on every push to `main` and every pull request: type-check, tests, build, the bundle-secret check and a smoke test of the built server; a `database` job runs `npm run test:rls`; a `docker` job builds the production image.

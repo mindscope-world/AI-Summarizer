@@ -4,6 +4,7 @@ import {createClient, type SupabaseClient} from '@supabase/supabase-js';
 import {SignJWT} from 'jose';
 import {Client} from 'pg';
 import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'vitest';
+import {createFeedbackRepository, type FeedbackRepository} from '../../src/lib/feedback';
 import {createRepository, upgradeLegacy, type DocumentRepository} from '../../src/lib/repository';
 import type {DocumentSummary} from '../../src/types';
 
@@ -352,6 +353,145 @@ describe.skipIf(!dbUrl || !restUrl || !jwtSecret)('repository against Postgres +
       expect(got).toMatchObject({title: 'Consensus Protocols', timeAgoGroup: 'Older'});
       expect(got.comments.map((c) => c.text)).toEqual(['old comment']);
       expect(got.discussionQuestions[0].question).toBe('Q?');
+    });
+  });
+
+  describe('feedback', () => {
+    let aliceFb: FeedbackRepository;
+    let bobFb: FeedbackRepository;
+    let facultyFb: FeedbackRepository;
+    let facultyId: string;
+
+    const rateInput = (documentId: string, rating: number, over: Partial<Parameters<FeedbackRepository['submit']>[0]> = {}) => ({
+      documentId,
+      rating,
+      comment: '',
+      consent: false,
+      role: 'student' as const,
+      model: 'openai/gpt-oss-120b',
+      params: {mode: 'abstractive' as const, length: 'balanced' as const, language: 'English', category: 'Computer Science'},
+      ...over,
+    });
+
+    beforeAll(async () => {
+      facultyId = await newUser('lecturer@example.edu');
+      await admin.query(`update profiles set role = 'faculty' where id = $1`, [facultyId]);
+      aliceFb = createFeedbackRepository(await signedInClient(aliceId), aliceId);
+      bobFb = createFeedbackRepository(await signedInClient(bobId), bobId);
+      facultyFb = createFeedbackRepository(await signedInClient(facultyId), facultyId);
+    });
+
+    beforeEach(async () => {
+      await admin.query(`delete from feedback`);
+    });
+
+    it('stores a rating and reads it back with what it was about', async () => {
+      const doc = makeDoc();
+      await alice.create(doc);
+      const saved = await aliceFb.submit(rateInput(doc.id, 4, {comment: 'Clear and accurate.', consent: true}));
+      expect(saved).toMatchObject({documentId: doc.id, rating: 4, comment: 'Clear and accurate.', consent: true, role: 'student', model: 'openai/gpt-oss-120b'});
+      expect(saved.params).toEqual({mode: 'abstractive', length: 'balanced', language: 'English', category: 'Computer Science'});
+      expect(await aliceFb.mine()).toEqual([saved]);
+    });
+
+    it('replaces the rating when the same person rates the same summary again', async () => {
+      const doc = makeDoc();
+      await alice.create(doc);
+      const first = await aliceFb.submit(rateInput(doc.id, 2));
+      const second = await aliceFb.submit(rateInput(doc.id, 5, {comment: 'Better on a second read.'}));
+      expect(second.id).toBe(first.id);
+      const mine = await aliceFb.mine();
+      expect(mine).toHaveLength(1);
+      expect(mine[0]).toMatchObject({rating: 5, comment: 'Better on a second read.'});
+    });
+
+    it('rejects a rating outside 1 to 5 before it is sent', async () => {
+      const doc = makeDoc();
+      await alice.create(doc);
+      await expect(aliceFb.submit(rateInput(doc.id, 0))).rejects.toThrow(/1 to 5/);
+      await expect(aliceFb.submit(rateInput(doc.id, 6))).rejects.toThrow(/1 to 5/);
+      expect(writes()).toEqual([`POST /documents`, `POST /document_sources`, `POST /summaries`]);
+    });
+
+    it('keeps one person’s ratings out of another person’s list', async () => {
+      const doc = makeDoc();
+      await alice.create(doc);
+      await aliceFb.submit(rateInput(doc.id, 5, {comment: 'private'}));
+      expect(await bobFb.mine()).toEqual([]);
+    });
+
+    it('does not let someone rate a document that is not theirs', async () => {
+      const doc = makeDoc();
+      await alice.create(doc);
+      await expect(bobFb.submit(rateInput(doc.id, 1))).rejects.toThrow(/Could not save your rating/);
+    });
+
+    describe('examples for the next summary', () => {
+      it('offers only the person’s own consented, well-rated summaries in the same subject and language', async () => {
+        const good = makeDoc({title: 'Good one', contentParagraphs: ['Quorums make replicas agree.']});
+        const unconsented = makeDoc({title: 'No consent'});
+        const lowRated = makeDoc({title: 'Low rated'});
+        const otherSubject = makeDoc({title: 'Other subject', category: 'Economics'});
+        for (const d of [good, unconsented, lowRated, otherSubject]) await alice.create(d);
+        await aliceFb.submit(rateInput(good.id, 5, {consent: true}));
+        await aliceFb.submit(rateInput(unconsented.id, 5, {consent: false}));
+        await aliceFb.submit(rateInput(lowRated.id, 3, {consent: true}));
+        await aliceFb.submit(rateInput(otherSubject.id, 5, {consent: true}));
+
+        const examples = await aliceFb.examples({category: 'Computer Science', language: 'English'});
+        expect(examples.map((e) => e.title)).toEqual(['Good one']);
+        expect(examples[0].text).toContain('Quorums make replicas agree.');
+        expect(examples[0].text).toContain('- Quorums. A majority vote.');
+        // Only the summary: never the source text.
+        expect(examples[0].text).not.toContain('full extracted source text');
+
+        expect(await aliceFb.examples({category: 'Computer Science', language: 'Swahili'})).toEqual([]);
+      });
+
+      it('never offers someone else’s summaries, even consented ones', async () => {
+        const doc = makeDoc({title: 'Alice’s good one'});
+        await alice.create(doc);
+        await aliceFb.submit(rateInput(doc.id, 5, {consent: true}));
+        expect(await bobFb.examples({category: 'Computer Science', language: 'English'})).toEqual([]);
+      });
+
+      it('returns the best-rated first and no more than asked for', async () => {
+        const docs = [makeDoc({title: 'Four'}), makeDoc({title: 'Five'}), makeDoc({title: 'Also four'})];
+        for (const d of docs) await alice.create(d);
+        await aliceFb.submit(rateInput(docs[0].id, 4, {consent: true}));
+        await aliceFb.submit(rateInput(docs[1].id, 5, {consent: true}));
+        await aliceFb.submit(rateInput(docs[2].id, 4, {consent: true}));
+        const got = await aliceFb.examples({category: 'Computer Science', language: 'English', limit: 2});
+        expect(got).toHaveLength(2);
+        expect(got[0].title).toBe('Five');
+      });
+    });
+
+    describe('faculty report', () => {
+      const seed = async (repo: DocumentRepository, fb: FeedbackRepository, ratings: number[]) => {
+        for (const r of ratings) {
+          const d = makeDoc();
+          await repo.create(d);
+          await fb.submit(rateInput(d.id, r));
+        }
+      };
+
+      it('gives faculty averages over everyone, only for groups of three or more', async () => {
+        await seed(alice, aliceFb, [5, 4]);
+        await seed(bob, bobFb, [3]);
+        const rows = await facultyFb.aggregates();
+        const model = rows!.find((r) => r.dimension === 'model' && r.value === 'openai/gpt-oss-120b');
+        expect(model).toEqual({dimension: 'model', value: 'openai/gpt-oss-120b', responses: 3, averageRating: 4});
+      });
+
+      it('shows nothing for a group that is too small to be anonymous', async () => {
+        await seed(alice, aliceFb, [5, 4]);
+        expect(await facultyFb.aggregates()).toEqual([]);
+      });
+
+      it('is not available to anyone who is not faculty', async () => {
+        expect(await aliceFb.aggregates()).toBeNull();
+      });
     });
   });
 });

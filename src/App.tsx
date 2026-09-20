@@ -3,18 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { Suspense, lazy, useState, useEffect, useMemo, useRef } from 'react';
 import { Navbar } from './components/Navbar';
 import { SidebarHistory } from './components/SidebarHistory';
-import { MainEditorView } from './components/MainEditorView';
-import { DashboardView } from './components/DashboardView';
-import { LandingView } from './components/LandingView';
-import { ProgramsView } from './components/ProgramsView';
-import { SchedulingView } from './components/SchedulingView';
-import { MetricsView } from './components/MetricsView';
-import { NewSummaryModal } from './components/NewSummaryModal';
-import { ArchitectureModal } from './components/ArchitectureModal';
-import { SettingsModal } from './components/SettingsModal';
 import { CommentsDrawer } from './components/CommentsDrawer';
 import { DocumentSummary, NavigationTab, CommentItem, ExportFormat } from './types';
 import { describeApiError, exportDocument } from './lib/api';
@@ -23,9 +14,31 @@ import { saveBlob } from './lib/download';
 import { auth, useAuth } from './lib/auth';
 import { supabase } from './lib/supabase';
 import { createRepository, newId } from './lib/repository';
+import { createFeedbackRepository } from './lib/feedback';
+import { useFeedback } from './lib/useFeedback';
+import type { FeedbackSubmission } from './components/SummaryFeedback';
 import { useDocuments } from './lib/useDocuments';
 import { useLegacyImport } from './lib/useLegacyImport';
+import { useStableCallback } from './lib/useStableCallback';
 import { Sparkles } from 'lucide-react';
+
+// Each screen is its own chunk, loaded when first needed: the landing page and the editor are the
+// largest, and a signed-in student never needs the landing page's artwork and vice versa.
+const LandingView = lazy(() => import('./components/LandingView').then((m) => ({ default: m.LandingView })));
+const MainEditorView = lazy(() => import('./components/MainEditorView').then((m) => ({ default: m.MainEditorView })));
+const DashboardView = lazy(() => import('./components/DashboardView').then((m) => ({ default: m.DashboardView })));
+const ProgramsView = lazy(() => import('./components/ProgramsView').then((m) => ({ default: m.ProgramsView })));
+const SchedulingView = lazy(() => import('./components/SchedulingView').then((m) => ({ default: m.SchedulingView })));
+const MetricsView = lazy(() => import('./components/MetricsView').then((m) => ({ default: m.MetricsView })));
+const NewSummaryModal = lazy(() => import('./components/NewSummaryModal').then((m) => ({ default: m.NewSummaryModal })));
+const ArchitectureModal = lazy(() => import('./components/ArchitectureModal').then((m) => ({ default: m.ArchitectureModal })));
+const SettingsModal = lazy(() => import('./components/SettingsModal').then((m) => ({ default: m.SettingsModal })));
+
+const ScreenFallback = () => (
+  <div role="status" className="py-24 text-center text-sm text-slate-500">
+    Loading...
+  </div>
+);
 
 export default function App() {
   // Navigation tab state: the public landing page is what visitors see first.
@@ -45,16 +58,26 @@ export default function App() {
     [authUser?.id],
   );
   const docs = useDocuments(repo);
+
+  // Ratings the student has given their summaries (private to them, like everything else).
+  const feedbackRepo = useMemo(
+    () => (authUser && supabase ? createFeedbackRepository(supabase, authUser.id) : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [authUser?.id],
+  );
+  const feedback = useFeedback(feedbackRepo);
   const documents = docs.documents;
   const legacy = useLegacyImport(repo, authUser?.id ?? null, docs.reload);
 
   const [selectedDocId, setSelectedDocId] = useState<string | null>(null);
 
-  // Global search query
-  const [searchQuery, setSearchQuery] = useState('');
-
   // Modals & Panels
   const [isNewSummaryOpen, setIsNewSummaryOpen] = useState(false);
+  // Once opened, the summary dialog stays mounted (hidden) so a summary still being written survives closing it.
+  const [newSummaryLoaded, setNewSummaryLoaded] = useState(false);
+  useEffect(() => {
+    if (isNewSummaryOpen) setNewSummaryLoaded(true);
+  }, [isNewSummaryOpen]);
   const [isArchitectureOpen, setIsArchitectureOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isCommentsOpen, setIsCommentsOpen] = useState(false);
@@ -92,21 +115,22 @@ export default function App() {
 
   const handleUpdateDocument = docs.update;
 
-  const handleSelectDocument = (doc: DocumentSummary) => {
+  // Stable identities: the history list is memoised, so an edit re-renders only the card that changed.
+  const handleSelectDocument = useStableCallback((doc: DocumentSummary) => {
     setSelectedDocId(doc.id);
     if (activeTab !== 'Journal') {
       setActiveTab('Journal');
     }
-  };
+  });
 
-  const handleDeleteDocument = async (docId: string) => {
+  const handleDeleteDocument = useStableCallback(async (docId: string) => {
     if (await docs.remove(docId)) {
       if (selectedDocId === docId) setSelectedDocId(null);
       showToast('Reflection removed from history.');
     }
-  };
+  });
 
-  const handleDuplicateDocument = async (doc: DocumentSummary) => {
+  const handleDuplicateDocument = useStableCallback(async (doc: DocumentSummary) => {
     const sourceText = doc.sourceText ?? (await repo?.loadSourceText(doc.id)) ?? undefined;
     const now = new Date().toISOString();
     const dup: DocumentSummary = {
@@ -122,7 +146,7 @@ export default function App() {
     await docs.add(dup);
     setSelectedDocId(dup.id);
     showToast('Reflection duplicated successfully.');
-  };
+  });
 
   const handleNewDocumentCreated = async (newDoc: DocumentSummary, options?: { originalFile?: File | null }) => {
     setSelectedDocId(newDoc.id);
@@ -144,6 +168,32 @@ export default function App() {
     handleUpdateDocument({ ...currentDoc, comments: [...currentDoc.comments, newComment] });
     showToast('Comment added.');
   };
+
+  const handleSubmitFeedback = async (doc: DocumentSummary, submission: FeedbackSubmission) => {
+    if (!authUser) return;
+    const meta = doc.sourceMetadata;
+    await feedback.submit({
+      documentId: doc.id,
+      rating: submission.rating,
+      comment: submission.comment,
+      consent: submission.consent,
+      role: authUser.role,
+      model: meta?.modelUsed,
+      params: {
+        mode: meta?.summaryMode,
+        length: meta?.summaryLength,
+        language: meta?.language,
+        category: doc.category || undefined,
+        usedExamples: (meta?.examplesUsed ?? 0) > 0,
+      },
+    });
+  };
+
+  const getExamples = useMemo(
+    () => (feedbackRepo ? (category: string, language: string) => feedbackRepo.examples({ category, language }) : undefined),
+    [feedbackRepo],
+  );
+  const loadAggregates = useMemo(() => (feedbackRepo ? () => feedbackRepo.aggregates() : undefined), [feedbackRepo]);
 
   const exporting = useRef(false);
   const handleExport = async (format: ExportFormat, language: string) => {
@@ -169,8 +219,6 @@ export default function App() {
         <Navbar
           activeTab={tab}
           onTabChange={setActiveTab}
-          searchQuery={searchQuery}
-          onSearchChange={setSearchQuery}
           onOpenArchitecture={() => setIsArchitectureOpen(true)}
           onOpenSettings={() => setIsSettingsOpen(true)}
           onSignOut={() => void auth.signOut()}
@@ -179,6 +227,7 @@ export default function App() {
 
       {/* Main App Container */}
       <main className={tab === 'Landing' ? 'flex-1 w-full p-0 overflow-x-hidden' : 'flex-1 w-full max-w-[1720px] mx-auto p-3 sm:p-4 lg:p-6 transition-all'}>
+        <Suspense fallback={<ScreenFallback />}>
         
         {/* Tab 0: Academic System Landing Page */}
         {tab === 'Landing' && (
@@ -186,8 +235,6 @@ export default function App() {
             onLaunchApp={(tab) => setActiveTab(tab || 'Journal')}
             onOpenNewSummary={() => setIsNewSummaryOpen(true)}
             onOpenArchitecture={() => setIsArchitectureOpen(true)}
-            onSelectDoc={handleSelectDocument}
-            sampleDocs={documents}
           />
         )}
 
@@ -248,6 +295,11 @@ export default function App() {
                 onToggleComments={() => setIsCommentsOpen(!isCommentsOpen)}
                 isCommentsOpen={isCommentsOpen}
                 onExport={handleExport}
+                feedback={
+                  feedbackRepo
+                    ? { entry: feedback.forDocument(currentDoc.id), onSubmit: (submission) => handleSubmitFeedback(currentDoc, submission) }
+                    : undefined
+                }
               />
             ) : (
               <div className="flex-1 min-w-0 rounded-3xl border border-dashed border-slate-300 bg-white/60 p-10 text-center space-y-3">
@@ -298,10 +350,16 @@ export default function App() {
         )}
 
         {/* Tab 5: Technical Metrics & Evaluation */}
-        {tab === 'Metrics' && (
-          <MetricsView />
+        {tab === 'Metrics' && docs.status === 'ready' && authUser && (
+          <MetricsView
+            documents={documents}
+            feedback={{ entries: feedback.entries, status: feedback.status, error: feedback.error }}
+            role={authUser.role}
+            loadAggregates={loadAggregates}
+          />
         )}
 
+        </Suspense>
       </main>
 
       {/* Slide-over Comments Drawer */}
@@ -312,24 +370,23 @@ export default function App() {
         onAddComment={handleAddComment}
       />
 
-      {/* New Summarization & Ingestion Modal */}
-      <NewSummaryModal
-        isOpen={isNewSummaryOpen}
-        onClose={() => setIsNewSummaryOpen(false)}
-        onCreated={handleNewDocumentCreated}
-      />
+      <Suspense fallback={null}>
+        {/* New Summarization & Ingestion Modal */}
+        {newSummaryLoaded && (
+          <NewSummaryModal
+            isOpen={isNewSummaryOpen}
+            onClose={() => setIsNewSummaryOpen(false)}
+            onCreated={handleNewDocumentCreated}
+            getExamples={getExamples}
+          />
+        )}
 
-      {/* System Architecture 6-Stage Workflow Modal */}
-      <ArchitectureModal
-        isOpen={isArchitectureOpen}
-        onClose={() => setIsArchitectureOpen(false)}
-      />
+        {/* How the system works */}
+        {isArchitectureOpen && <ArchitectureModal isOpen onClose={() => setIsArchitectureOpen(false)} />}
 
-      {/* Settings Modal */}
-      <SettingsModal
-        isOpen={isSettingsOpen}
-        onClose={() => setIsSettingsOpen(false)}
-      />
+        {/* Settings Modal */}
+        {isSettingsOpen && <SettingsModal isOpen onClose={() => setIsSettingsOpen(false)} />}
+      </Suspense>
 
       {/* A save that failed is never silent */}
       {docs.saveError && (

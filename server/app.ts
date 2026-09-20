@@ -9,9 +9,10 @@ import {accessLog} from './middleware/accessLog';
 import {createAuthMiddleware} from './middleware/auth';
 import {createRateLimiter} from './middleware/rateLimit';
 import {requestId} from './middleware/requestId';
+import {securityHeaders} from './middleware/securityHeaders';
 import {createExportRouter} from './routes/export';
+import {createQuestionsRouter} from './routes/questions';
 import {createExtractRouter} from './routes/extract';
-import {createFeedbackRouter} from './routes/feedback';
 import {createHealthRouter} from './routes/health';
 import {createLlmGateway} from './ai/gateway';
 import {createChatModel} from './ai/model';
@@ -29,12 +30,6 @@ export interface AppOptions {
   ingestion?: Partial<IngestDeps>;
 }
 
-const baseHeaders: RequestHandler = (_req, res, next) => {
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
-  next();
-};
-
 const noStore: RequestHandler = (_req, res, next) => {
   res.setHeader('Cache-Control', 'no-store');
   next();
@@ -45,7 +40,7 @@ export function createApp({env, logger, staticDir, ingestion}: AppOptions): Expr
   app.disable('x-powered-by');
   app.set('trust proxy', env.TRUST_PROXY);
 
-  app.use(requestId, accessLog(logger), baseHeaders);
+  app.use(requestId, accessLog(logger), securityHeaders(env));
 
   const ingestDeps: IngestDeps = {
     limits: {
@@ -81,8 +76,8 @@ export function createApp({env, logger, staticDir, ingestion}: AppOptions): Expr
   const llm = createLlmGateway(env);
   api.use(createSummarizeRouter({env, logger, llm}));
   api.use(createTranslateRouter({env, logger, llm}));
-  api.use(createExportRouter({logger}));
-  api.use(createFeedbackRouter());
+  api.use(createQuestionsRouter({env, logger, llm}));
+  api.use(createExportRouter({env, logger}));
   api.use(apiNotFound);
   app.use('/api', api);
 

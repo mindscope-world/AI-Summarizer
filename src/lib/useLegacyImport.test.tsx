@@ -1,13 +1,34 @@
 // @vitest-environment jsdom
 import {act, cleanup, renderHook} from '@testing-library/react';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
-import {initialDocuments} from '../data/mockDocuments';
+import {LEGACY_DEMO_IDS} from '../data/legacyDemoIds';
 import type {DocumentSummary} from '../types';
 import {LEGACY_STORAGE_KEY, type DocumentRepository} from './repository';
 import {useLegacyImport} from './useLegacyImport';
 
+const base: DocumentSummary = {
+  id: 'base',
+  title: 'Base',
+  dateBadge: 'Today',
+  timeAgoGroup: 'Last 7 days',
+  category: 'Computer Science',
+  categoryColor: 'blue',
+  tags: [],
+  excerpt: '',
+  createdDate: 'March 05, 2026 09:30 AM',
+  emotionalTone: 'Reflective',
+  contentParagraphs: ['A paragraph.'],
+  bulletPoints: [{title: 'Point.', text: 'Detail.'}],
+  discussionQuestions: [{id: 'q1', question: 'Why?', context: ''}],
+  currentDiscussionIndex: 0,
+  userNotes: '',
+  comments: [],
+};
+
+const demoDocs = LEGACY_DEMO_IDS.map((id) => ({...base, id, title: `Demo ${id}`}));
+
 const mine = (id: string): DocumentSummary => ({
-  ...initialDocuments[0],
+  ...base,
   id,
   title: `My summary ${id}`,
   createdDate: 'March 05, 2026 09:30 AM',
@@ -23,7 +44,7 @@ afterEach(cleanup);
 
 describe('useLegacyImport', () => {
   it('offers only the summaries the person made, never the demo documents old versions shipped with', () => {
-    stash([...initialDocuments, mine('doc-1712345678901')]);
+    stash([...demoDocs, mine('doc-1712345678901')]);
     const repo = repoWith();
     const {result} = renderHook(() => useLegacyImport(repo, 'u1', vi.fn()));
     expect(result.current.count).toBe(1);

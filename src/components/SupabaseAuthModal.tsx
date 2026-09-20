@@ -1,4 +1,5 @@
 import React, { useEffect, useId, useState } from 'react';
+import { useModal } from '../lib/useModal';
 import { X, Mail, Lock, User, ArrowRight, CheckCircle2, AlertCircle } from 'lucide-react';
 import { auth } from '../lib/auth';
 
@@ -41,12 +42,7 @@ export const SupabaseAuthModal: React.FC<SupabaseAuthModalProps> = ({
     }
   }, [isOpen, initialMode]);
 
-  useEffect(() => {
-    if (!isOpen) return;
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [isOpen, onClose]);
+  const panelRef = useModal<HTMLDivElement>(isOpen, onClose);
 
   if (!isOpen) return null;
 
@@ -116,10 +112,12 @@ export const SupabaseAuthModal: React.FC<SupabaseAuthModalProps> = ({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-sm animate-in fade-in duration-200">
       <div
+        ref={panelRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby={`${ids}-title`}
-        className="bg-white w-full max-w-md max-h-[92vh] overflow-y-auto rounded-3xl shadow-2xl border border-slate-200 relative text-slate-800"
+        tabIndex={-1}
+        className="bg-white w-full max-w-md max-h-[92vh] overflow-y-auto rounded-3xl shadow-2xl border border-slate-200 relative text-slate-800 outline-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="bg-gradient-to-r from-[#181E2C] via-[#1F283D] to-[#121622] p-6 text-white relative">

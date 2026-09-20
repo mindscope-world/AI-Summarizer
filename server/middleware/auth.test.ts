@@ -88,7 +88,7 @@ describe('sign-in required (HS256 project secret)', () => {
 
   it('protects every other API route, including unknown ones', async () => {
     const {base} = await start({SUPABASE_JWT_SECRET: SECRET});
-    for (const path of ['/api/summarize', '/api/documents/x/export?format=pdf', '/api/feedback', '/api/nope']) {
+    for (const path of ['/api/summarize', '/api/export', '/api/questions', '/api/nope']) {
       const res = await fetch(`${base}${path}`, {method: path === '/api/nope' ? 'GET' : 'POST'});
       expect(res.status, path).toBe(401);
     }
