@@ -2,7 +2,10 @@ import {Router} from 'express';
 import {z} from 'zod';
 import {notImplemented} from '../lib/errors';
 import {validate} from '../middleware/validate';
-import {documentIdParams} from './documents';
+
+export const documentIdParams = z.object({
+  id: z.string().trim().min(1).max(128),
+});
 
 export const exportQuery = z.object({
   format: z.enum(['pdf', 'docx', 'txt', 'md']),

@@ -5,6 +5,7 @@
  *
  * Checks for:
  *   1. the actual values of secret-looking variables from the environment and .env
+ *      (VITE_* variables are public by design, e.g. the Supabase anon key, and are skipped)
  *   2. server-only setting names (would mean a Vite `define` leak)
  *   3. anything shaped like a Groq API key (gsk_...)
  */
@@ -41,10 +42,10 @@ if (!existsSync(distDir)) {
 
 const candidates = {...parseDotenv(path.resolve(process.cwd(), '.env')), ...process.env};
 const secretValues = Object.entries(candidates)
-  .filter(([name, value]) => SECRET_NAME.test(name) && value && value.length >= 8 && !PLACEHOLDER.test(value))
+  .filter(([name, value]) => !name.startsWith('VITE_') && SECRET_NAME.test(name) && value && value.length >= 8 && !PLACEHOLDER.test(value))
   .map(([name, value]) => ({name, value}));
 
-const forbiddenLiterals = ['GROQ_API_KEY', 'process.env.GROQ', 'GROQ_BASE_URL'];
+const forbiddenLiterals = ['GROQ_API_KEY', 'process.env.GROQ', 'GROQ_BASE_URL', 'SUPABASE_JWT_SECRET', 'SUPABASE_SERVICE_ROLE'];
 const groqKey = /gsk_[A-Za-z0-9]{20,}/;
 
 const findings = [];

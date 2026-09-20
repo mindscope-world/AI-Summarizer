@@ -5,8 +5,8 @@ declare global {
     interface Request {
       /** Correlation id, also returned as the `x-request-id` response header. */
       id: string;
-      /** Set by the auth middleware once Supabase auth lands (Phase 4). */
-      user?: {id: string; role?: 'student' | 'researcher' | 'faculty'};
+      /** The verified Supabase user; set by the auth middleware on every route except /api/health. */
+      user?: {id: string; email?: string};
     }
   }
 }

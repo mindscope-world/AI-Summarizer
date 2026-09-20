@@ -72,6 +72,22 @@ export function setApiBase(value: string): string {
   return normalized;
 }
 
+let accessTokenProvider: (() => Promise<string | null>) | null = null;
+
+/** Registers how to get the signed-in user's access token; every API call then sends it. */
+export function setAccessTokenProvider(provider: (() => Promise<string | null>) | null): void {
+  accessTokenProvider = provider;
+}
+
+async function authorizationHeader(): Promise<Record<string, string>> {
+  try {
+    const token = await accessTokenProvider?.();
+    return token ? {Authorization: `Bearer ${token}`} : {};
+  } catch {
+    return {};
+  }
+}
+
 export interface RequestOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   /** Plain objects are sent as JSON; FormData is sent as multipart. */
@@ -86,7 +102,9 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
   const {method = 'GET', body, signal, timeoutMs = DEFAULT_TIMEOUT_MS, baseUrl} = options;
   const base = baseUrl ? (normalizeApiBase(baseUrl) ?? DEFAULT_API_BASE) : getApiBase();
 
-  const headers: Record<string, string> = {Accept: 'application/json'};
+  const headers: Record<string, string> = {Accept: 'application/json', ...(await authorizationHeader())};
+  // The caller may have cancelled while we were fetching the token.
+  if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
   let payload: BodyInit | undefined;
   if (body instanceof FormData) {
     payload = body; // the browser sets the multipart boundary
@@ -202,6 +220,9 @@ export async function summarizeDocument(
 ): Promise<SummaryResult> {
   const {signal, onProgress, timeoutMs = SUMMARIZE_TIMEOUT_MS, baseUrl} = options;
   const base = baseUrl ? (normalizeApiBase(baseUrl) ?? DEFAULT_API_BASE) : getApiBase();
+  const auth = await authorizationHeader();
+  // The caller may have cancelled while we were fetching the token.
+  if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
 
   const controller = new AbortController();
   let timedOut = false;
@@ -217,7 +238,7 @@ export async function summarizeDocument(
     try {
       res = await fetch(`${base}/summarize`, {
         method: 'POST',
-        headers: {'Content-Type': 'application/json', Accept: 'text/event-stream'},
+        headers: {'Content-Type': 'application/json', Accept: 'text/event-stream', ...auth},
         body: JSON.stringify(input),
         signal: controller.signal,
       });
@@ -305,6 +326,8 @@ export function describeApiError(err: unknown): string {
         return 'This is taking too long. Try a smaller file or try again later.';
       case 'rate_limited':
         return 'You are going too fast. Wait a minute and try again.';
+      case 'unauthorized':
+        return 'Your session has expired. Please sign in again.';
       case 'http_error':
         // A 5xx with no structured body means something in front of the API (proxy, load balancer) failed.
         return err.status >= 500

@@ -37,6 +37,7 @@ describe('loadEnv', () => {
       GROQ_API_KEY: 'k',
       PORT: '8080',
       NODE_ENV: 'production',
+      SUPABASE_URL: 'https://abc.supabase.co',
       CORS_ORIGINS: 'https://a.example, https://b.example',
       MAX_UPLOAD_MB: '25',
       TRUST_PROXY: '1',
@@ -61,5 +62,36 @@ describe('loadEnv', () => {
       expect(message).toMatch(/LOG_LEVEL/);
       expect(message).not.toContain(secret);
     }
+  });
+
+  describe('sign-in configuration', () => {
+    const prod = {GROQ_API_KEY: 'abc123', NODE_ENV: 'production'};
+
+    it('requires sign-in by default', () => {
+      expect(loadEnv({GROQ_API_KEY: 'abc123'}).AUTH_MODE).toBe('required');
+    });
+
+    it('needs Supabase configured in production so tokens can be verified', () => {
+      expect(() => loadEnv(prod)).toThrow(/SUPABASE_URL/);
+      expect(loadEnv({...prod, SUPABASE_URL: 'https://abc.supabase.co'}).SUPABASE_URL).toBe('https://abc.supabase.co');
+      expect(loadEnv({...prod, SUPABASE_JWT_SECRET: 'x'.repeat(32)}).SUPABASE_JWT_SECRET).toHaveLength(32);
+    });
+
+    it('refuses to turn sign-in off in production', () => {
+      expect(() => loadEnv({...prod, SUPABASE_URL: 'https://abc.supabase.co', AUTH_MODE: 'off'})).toThrow(/AUTH_MODE=off/);
+      expect(loadEnv({GROQ_API_KEY: 'abc123', AUTH_MODE: 'off'}).AUTH_MODE).toBe('off');
+    });
+
+    it('does not echo a short secret back', () => {
+      const err = (() => {
+        try {
+          loadEnv({GROQ_API_KEY: 'abc123', SUPABASE_JWT_SECRET: 'tiny-secret'});
+        } catch (e) {
+          return e as Error;
+        }
+      })();
+      expect(err?.message).toMatch(/too short/);
+      expect(err?.message).not.toContain('tiny-secret');
+    });
   });
 });

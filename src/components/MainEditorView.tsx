@@ -83,6 +83,12 @@ export const MainEditorView: React.FC<MainEditorViewProps> = ({
   const [selectedQuestionSaved, setSelectedQuestionSaved] = useState(false);
 
   // User input reflection text
+  // The source text is fetched when a document is opened; never show made-up placeholder text meanwhile.
+  const sourceTextShown =
+    currentDoc.sourceText === undefined
+      ? 'Loading the original text...'
+      : currentDoc.sourceText || 'The original text is not available for this summary.';
+
   const [userReflection, setUserReflection] = useState(currentDoc.userNotes || '');
   const [isCopied, setIsCopied] = useState(false);
 
@@ -883,7 +889,7 @@ export const MainEditorView: React.FC<MainEditorViewProps> = ({
             <div className="prose prose-slate max-w-none text-xs text-slate-700 leading-relaxed bg-slate-50/50 p-6 rounded-2xl border border-slate-100 font-mono">
               <p className="font-bold text-sm text-slate-900 mb-2">ORIGINAL TEXT DUMP (PRE-SUMMARIZATION):</p>
               <p>
-                {currentDoc.sourceText || `Title: ${currentDoc.title}\nCoursework Reference: BCSITP/0003/S24 - East Africa University.\nIn recent years, higher education institutions have faced unprecedented volumes of coursework, academic literature, lecture transcripts, and peer-reviewed journals. Students encounter high cognitive burdens when synthesizing dense materials under constrained assignment timelines. In response, modern NLP pipelines utilizing Bidirectional Encoder Representations from Transformers (BERT) provide an automated synthesis framework. By leveraging self-attention mechanisms across input tokens, the model computes salient topic embeddings, preserves semantic consistency, and filters noise...`}
+                {sourceTextShown}
               </p>
             </div>
           </div>
@@ -903,7 +909,7 @@ export const MainEditorView: React.FC<MainEditorViewProps> = ({
                 </div>
                 <div className="text-slate-600 leading-relaxed space-y-2 max-h-[600px] overflow-y-auto pr-2">
                   <p>
-                    {currentDoc.sourceText || `In recent academic environments, processing complex literature requires multiple passes of reading and note-taking. Studies show university students experience academic fatigue when handling lengthy syllabi. The implementation of transformer models bridges this gap by reducing the volume of information while retaining critical methodologies, core arguments, and factual consistency.`}
+                    {sourceTextShown}
                   </p>
                   <p>
                     Every mistake previously experienced caused hesitation. However, systematic reframing converted setbacks into structured learning opportunities, unlocking proactive initiative in coursework selection and collaborative project leadership.

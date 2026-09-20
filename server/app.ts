@@ -6,9 +6,9 @@ import type {Env} from './lib/env';
 import {apiNotFound, errorHandler} from './lib/errors';
 import type {Logger} from './lib/logger';
 import {accessLog} from './middleware/accessLog';
+import {createAuthMiddleware} from './middleware/auth';
 import {createRateLimiter} from './middleware/rateLimit';
 import {requestId} from './middleware/requestId';
-import {createDocumentsRouter} from './routes/documents';
 import {createExportRouter} from './routes/export';
 import {createExtractRouter} from './routes/extract';
 import {createFeedbackRouter} from './routes/feedback';
@@ -70,15 +70,15 @@ export function createApp({env, logger, staticDir, ingestion}: AppOptions): Expr
       exposedHeaders: ['x-request-id', 'RateLimit', 'RateLimit-Policy', 'Retry-After'],
     }),
   );
-  // Phase 4: the Supabase JWT auth middleware goes here so the limiter can key on req.user.
+  // Public: uptime probes and the Settings "test connection" work without signing in.
+  api.use(createHealthRouter(env));
+  // Everything below needs a signed-in user. Auth runs before the limiter so limits are per user.
+  api.use(createAuthMiddleware(env, logger));
   api.use(createRateLimiter(env.RATE_LIMIT_PER_MINUTE));
   api.use(express.json({limit: env.JSON_BODY_LIMIT}));
-
-  api.use(createHealthRouter(env));
   api.use(createExtractRouter({env, logger, ingestion: ingestDeps}));
   api.use(createSummarizeRouter({env, logger, llm: createLlmGateway(env)}));
   api.use(createExportRouter());
-  api.use(createDocumentsRouter());
   api.use(createFeedbackRouter());
   api.use(apiNotFound);
   app.use('/api', api);

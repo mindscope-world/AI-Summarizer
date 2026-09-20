@@ -2,7 +2,7 @@ import {z} from 'zod';
 
 const PLACEHOLDER_KEYS = new Set(['MY_GROQ_API_KEY', 'YOUR_API_KEY', 'your-api-key', 'gsk_your_key_here']);
 
-const envSchema = z.object({
+const baseSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   PORT: z.coerce.number().int().min(1).max(65535).default(3001),
   GROQ_API_KEY: z
@@ -36,6 +36,15 @@ const envSchema = z.object({
   LLM_TIMEOUT_MS: z.coerce.number().int().min(1000).max(300_000).default(60_000),
   LLM_MAX_RETRIES: z.coerce.number().int().min(0).max(10).default(3),
   APP_URL: z.url().optional(),
+  /** Your Supabase project URL. Used to fetch the public keys that verify sign-in tokens (JWKS). */
+  SUPABASE_URL: z.url().optional(),
+  /** Legacy HS256 JWT secret from Supabase (Project Settings > API). Not needed with asymmetric signing keys. */
+  SUPABASE_JWT_SECRET: z.string().trim().min(16, 'SUPABASE_JWT_SECRET looks too short').optional(),
+  /**
+   * "required": every /api route except /api/health needs a valid Supabase sign-in token.
+   * "off" skips that check (local API experiments and tests only; refused in production).
+   */
+  AUTH_MODE: z.enum(['required', 'off']).default('required'),
   MAX_UPLOAD_MB: z.coerce.number().positive().max(200).default(50),
   JSON_BODY_LIMIT: z
     .string()
@@ -58,6 +67,19 @@ const envSchema = z.object({
     ),
   TRUST_PROXY: z.coerce.number().int().min(0).default(0),
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
+});
+
+const envSchema = baseSchema.superRefine((env, ctx) => {
+  if (env.NODE_ENV !== 'production') return;
+  if (env.AUTH_MODE === 'off') {
+    ctx.addIssue({code: 'custom', path: ['AUTH_MODE'], message: 'AUTH_MODE=off is not allowed in production'});
+  } else if (!env.SUPABASE_URL && !env.SUPABASE_JWT_SECRET) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['SUPABASE_URL'],
+      message: 'SUPABASE_URL (or SUPABASE_JWT_SECRET) is required in production so sign-in tokens can be verified',
+    });
+  }
 });
 
 export type Env = z.infer<typeof envSchema>;

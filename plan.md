@@ -14,8 +14,10 @@
 | 0 Baseline & housekeeping | Done, except reading the PDF / locking D1-D5 (PDF unreadable from the dev environment; defaults in §3 assumed) |
 | 1 Backend foundation | Done |
 | 2 Ingestion & preprocessing | Done. Scanned-PDF OCR uses an open-weights vision model (`qwen/qwen3.8-27b`) through LangChain + Groq; verified live on an image-only PDF |
-| LLM provider swap | Done: Gemini removed; LangChain (`@langchain/groq`) + open-weights Qwen on Groq is the model layer for OCR now and summarization in Phase 3 |
-| 3-8 | Not started |
+| LLM provider swap | Done: Gemini removed; LangChain (`@langchain/groq`) on Groq is the model layer: Qwen (`qwen/qwen3.8-27b`) for OCR, `openai/gpt-oss-120b` for summarization (Groq caps Qwen at 1,000 output tokens/min, too little for a summarization call) |
+| 3 AI summarization core | Done, except the items below. `POST /api/summarize` (JSON or SSE progress) runs the real abstractive/extractive summarizer with map-reduce, structured output, length/language controls and a grounding check; `NewSummaryModal` uses it with live progress and cancel; fake ROUGE constants and the template summary are gone. Verified live on an 11-page PDF (~2 min on the free tier). **Still open:** `POST /api/questions` (the editor's "Generate question" is still a canned 800 ms timer); "BERT/T5/GPT-Academic" labels remain in `SettingsModal`, `ArchitectureModal`, `LandingView` and other views, and `SummarizeJobConfig` is not aligned with the real options; the 100+ page map-reduce exit criterion and Swahili output have not been tried against the live API |
+| 4 Persistence, auth, roles | Done, except the items below. Real Supabase Auth (email/password, magic link, Google); `supabase/migrations/20260920000000_init.sql` creates `profiles`, `documents`, `document_sources`, `summaries`, `comments`, `review_progress`, `feedback`, `user_preferences` and the private `uploads` bucket, with owner-only RLS everywhere; `src/lib/repository.ts` + `useDocuments` replace localStorage state; the workspace is gated on a session; the server verifies the Supabase JWT on all `/api` routes but `/health`; the role comes from `profiles.role` (header role toggle removed); comments use the real user; the "cannot delete the last document" rule is gone; a one-time import moves old `leaderforge_summaries` into the account. Verified: lint, build, `verify:bundle`, 391 unit tests, and 50 database tests (`npm run test:rls`: two accounts cannot see or change each other's rows or files). **Still open:** never run against a real Supabase project (Google OAuth redirect, email confirmation, storage upload and the JWKS check need one); no localStorage offline cache; no faculty read access (no share model chosen); `feedback` is stored but not yet wired to the UI (Phase 6) |
+| 5-8 | Not started |
 
 ---
 
@@ -53,10 +55,10 @@
 |---|---|---|---|
 | 1 Input sources | Lecture notes, PDF/DOCX/TXT, library/e-books, web articles, manual upload/paste | Only filename captured; no URL input in UI; "library" = 3 canned presets | Phase 2 |
 | 2 Preprocessing | Text extraction (OCR/parser), cleaning, language detection, segmentation | Simulated | Phase 2 |
-| 3 AI/NLP | NLP processing, semantic understanding, extractive/abstractive model, summary generation | Simulated | Phase 3 |
+| 3 AI/NLP | NLP processing, semantic understanding, extractive/abstractive model, summary generation | Done (see Progress for open items) | Phase 3 |
 | 4 Output | Structured format, optional translation, dashboard display, PDF/DOCX/TXT export | Display ✅; translation ❌; export produces invalid files | Phases 3, 5 |
-| 5 Users | Students, researchers, faculty, staff | Roles are UI-only | Phase 4 |
-| DB & cloud storage | Store uploads, summaries, history & preferences | localStorage only | Phase 4 |
+| 5 Users | Students, researchers, faculty, staff | Done: roles come from `profiles.role`; faculty is admin-granted | Phase 4 |
+| DB & cloud storage | Store uploads, summaries, history & preferences | Done: Supabase Postgres + Storage with RLS (untested against a live project) | Phase 4 |
 | 6 Feedback loop | Ratings/comments → analysis → retraining → better summaries | Form discards input | Phase 6 |
 
 ---

@@ -23,8 +23,7 @@ interface NavbarProps {
   onSearchChange: (query: string) => void;
   onOpenArchitecture: () => void;
   onOpenSettings: () => void;
-  userRole: 'student' | 'researcher' | 'faculty';
-  onRoleChange: (role: 'student' | 'researcher' | 'faculty') => void;
+  onSignOut: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -34,8 +33,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onSearchChange,
   onOpenArchitecture,
   onOpenSettings,
-  userRole,
-  onRoleChange,
+  onSignOut,
 }) => {
   const authUser = useAuthUser();
   const [showProfileMenu, setShowProfileMenu] = React.useState(false);
@@ -224,27 +222,13 @@ export const Navbar: React.FC<NavbarProps> = ({
                   </div>
                 </div>
 
-                <div className="space-y-1 mb-2">
-                  <p className="text-[10px] font-semibold uppercase text-slate-400 px-2 py-0.5">Switch Role</p>
-                  {(['student', 'researcher', 'faculty'] as const).map((role) => (
-                    <button
-                      key={role}
-                      onClick={() => {
-                        onRoleChange(role);
-                        setShowProfileMenu(false);
-                      }}
-                      className={`w-full text-left px-2.5 py-1.5 rounded-lg capitalize flex items-center justify-between ${
-                        userRole === role ? 'bg-emerald-50 text-emerald-800 font-semibold' : 'text-slate-600 hover:bg-slate-50'
-                      }`}
-                    >
-                      <span className="flex items-center gap-1.5">
-                        <GraduationCap className="w-3.5 h-3.5" />
-                        {role} Mode
-                      </span>
-                      {userRole === role && <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />}
-                    </button>
-                  ))}
-                </div>
+                {authUser && (
+                  <div className="mb-2 px-2 py-1.5 rounded-lg bg-slate-50 flex items-center gap-1.5 text-slate-600">
+                    <GraduationCap className="w-3.5 h-3.5" />
+                    <span className="capitalize font-semibold">{authUser.role}</span>
+                    <span className="text-[10px] text-slate-400 truncate">{authUser.email}</span>
+                  </div>
+                )}
 
                 <div className="pt-2 border-t border-slate-100 flex flex-col gap-1">
                   <button 
@@ -255,6 +239,15 @@ export const Navbar: React.FC<NavbarProps> = ({
                     className="text-left px-2.5 py-1.5 text-slate-600 hover:bg-slate-50 rounded-lg"
                   >
                     Account & Preferences
+                  </button>
+                  <button
+                    onClick={() => {
+                      setShowProfileMenu(false);
+                      onSignOut();
+                    }}
+                    className="text-left px-2.5 py-1.5 text-red-600 hover:bg-red-50 rounded-lg"
+                  >
+                    Sign out
                   </button>
                 </div>
               </div>

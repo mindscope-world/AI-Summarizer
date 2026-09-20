@@ -17,7 +17,8 @@ const servers: Server[] = [];
 
 /** `ingestion: null` keeps the app's real default OCR provider (used with a fake Groq server). */
 async function start(overrides: Record<string, string> = {}, ingestion: Partial<IngestDeps> | null = {}) {
-  const env = loadEnv({GROQ_API_KEY: SECRET, NODE_ENV: 'test', ...overrides});
+  // Most tests are not about sign-in, so they run with the token check off; auth.test.ts covers it.
+  const env = loadEnv({GROQ_API_KEY: SECRET, NODE_ENV: 'test', AUTH_MODE: 'off', ...overrides});
   const lines: string[] = [];
   const logger = createLogger('debug', (line) => lines.push(line));
   // Never let a test reach the real OCR provider.
@@ -446,10 +447,10 @@ describe('rate limiting', () => {
   it('returns 429 after the per-minute limit but never throttles /health', async () => {
     const {base} = await start({RATE_LIMIT_PER_MINUTE: '3'});
     const statuses: number[] = [];
-    for (let i = 0; i < 5; i++) statuses.push((await fetch(`${base}/api/documents`)).status);
+    for (let i = 0; i < 5; i++) statuses.push((await fetch(`${base}/api/documents/doc-1/export?format=pdf`)).status);
     expect(statuses).toEqual([501, 501, 501, 429, 429]);
 
-    const limited = await fetch(`${base}/api/documents`);
+    const limited = await fetch(`${base}/api/documents/doc-1/export?format=pdf`);
     expect((await errorOf(limited)).code).toBe('rate_limited');
 
     for (let i = 0; i < 6; i++) expect((await fetch(`${base}/api/health`)).status).toBe(200);

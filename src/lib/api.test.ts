@@ -7,6 +7,7 @@ import {
   getApiBase,
   getHealth,
   normalizeApiBase,
+  setAccessTokenProvider,
   setApiBase,
   summarizeDocument,
 } from './api';
@@ -278,5 +279,48 @@ describe('summarizeDocument', () => {
     const pending = summarizeDocument(input, {signal: controller.signal});
     controller.abort();
     await expect(pending).rejects.toMatchObject({name: 'AbortError'});
+  });
+});
+
+describe('sending the signed-in user’s token', () => {
+  afterEach(() => setAccessTokenProvider(null));
+
+  it('adds an Authorization header to API calls and to summarization', async () => {
+    setAccessTokenProvider(async () => 'jwt-abc');
+    const fetchMock = mockFetch(() => json({status: 'ok'}));
+    await getHealth();
+    expect((fetchMock.mock.calls[0][1].headers as Record<string, string>).Authorization).toBe('Bearer jwt-abc');
+
+    const sse = mockFetch(
+      () => new Response(`data: ${JSON.stringify({type: 'result', result: {title: 'T'}})}\n\n`, {headers: {'content-type': 'text/event-stream'}}),
+    );
+    await summarizeDocument({text: 'x', category: 'CS', summarizationType: 'abstractive', length: 'balanced', language: 'English'});
+    expect((sse.mock.calls[0][1].headers as Record<string, string>).Authorization).toBe('Bearer jwt-abc');
+  });
+
+  it('sends no header when signed out, and still works if the token lookup fails', async () => {
+    const fetchMock = mockFetch(() => json({status: 'ok'}));
+    await getHealth();
+    expect((fetchMock.mock.calls[0][1].headers as Record<string, string>).Authorization).toBeUndefined();
+
+    setAccessTokenProvider(async () => {
+      throw new Error('storage blocked');
+    });
+    await getHealth();
+    expect((fetchMock.mock.calls[1][1].headers as Record<string, string>).Authorization).toBeUndefined();
+  });
+
+  it('explains an expired session in plain words', () => {
+    expect(describeApiError(new ApiError('x', 401, 'unauthorized'))).toMatch(/sign in again/i);
+  });
+
+  it('stops before sending if the caller cancelled while the token was being fetched', async () => {
+    setAccessTokenProvider(() => new Promise((r) => setTimeout(() => r('t'), 20)));
+    const fetchMock = mockFetch(() => json({}));
+    const controller = new AbortController();
+    const pending = apiRequest('/health', {signal: controller.signal});
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({name: 'AbortError'});
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

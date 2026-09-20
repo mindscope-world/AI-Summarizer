@@ -11,6 +11,17 @@ vi.mock('../lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/api')>();
   return { ...actual, extractDocument: vi.fn(), summarizeDocument: vi.fn() };
 });
+vi.mock('../lib/useAuthUser', () => ({
+  useAuthUser: () => ({
+    id: '11111111-1111-4111-8111-111111111111',
+    email: 'test@example.edu',
+    fullName: 'Test Student',
+    avatarUrl: '',
+    institution: 'Test University',
+    role: 'student',
+    createdAt: '2026-01-01T00:00:00Z',
+  }),
+}));
 const extractDocument = vi.mocked(api.extractDocument);
 const summarizeDocument = vi.mocked(api.summarizeDocument);
 
@@ -54,7 +65,7 @@ const makeResult = (over: Partial<ExtractionResult> = {}): ExtractionResult => (
 });
 
 const setup = () => {
-  const onCreated = vi.fn<(doc: DocumentSummary) => void>();
+  const onCreated = vi.fn<(doc: DocumentSummary, options?: { originalFile?: File | null }) => void>();
   const onClose = vi.fn();
   // applyAccept:false so the component's own validation is what we exercise
   const user = userEvent.setup({ applyAccept: false, advanceTimers: (ms) => vi.advanceTimersByTime(ms) });
@@ -284,8 +295,12 @@ describe('NewSummaryModal: pasted text and creating the document', () => {
       sourceLanguage: 'en',
     });
     const doc = onCreated.mock.calls[0][0];
+    // A real id and timestamp, so it can be stored; pasted text has no original file to keep.
+    expect(doc.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    expect(new Date(doc.createdAt!).getTime()).toBeGreaterThan(Date.now() - 60_000);
+    expect(onCreated.mock.calls[0][1]).toEqual({ originalFile: null });
     expect(doc.sourceText).toBe(result.text);
-    expect(doc.sourceMetadata).toMatchObject({ originalWordCount: 1234, fileType: 'NOTE', author: 'Demo Student' });
+    expect(doc.sourceMetadata).toMatchObject({ originalWordCount: 1234, fileType: 'NOTE', author: 'Test Student', institution: 'Test University' });
     expect(doc.title).toBe('Synthesized Academic Reflection');
     expect(onClose).toHaveBeenCalled();
   });
@@ -313,6 +328,8 @@ describe('NewSummaryModal: pasted text and creating the document', () => {
 
     expect(extractDocument).toHaveBeenCalledTimes(1);
     const doc = onCreated.mock.calls[0][0];
+    // The uploaded file is handed over so the original can be kept in the account's storage.
+    expect(onCreated.mock.calls[0][1]?.originalFile?.name).toBe('Lecture_Notes-4.pdf');
     expect(doc.title).toBe('Lecture Notes 4');
     expect(doc.sourceMetadata).toMatchObject({ fileName: 'Lecture_Notes-4.pdf', fileType: 'PDF', originalWordCount: 1234 });
   });

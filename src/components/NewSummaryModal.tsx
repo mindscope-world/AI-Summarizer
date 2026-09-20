@@ -16,12 +16,13 @@ import {
 import { DocumentSummary, ExtractionResult, SourceMetadata, SummarizeProgress, SummaryResult } from '../types';
 import { cn } from '../lib/utils';
 import { useAuthUser } from '../lib/useAuthUser';
+import { newId } from '../lib/repository';
 import { ACCEPTED_EXTENSIONS, MAX_UPLOAD_MB, describeApiError, extractDocument, summarizeDocument, type ExtractInput } from '../lib/api';
 
 interface NewSummaryModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onCreated: (newDoc: DocumentSummary) => void;
+  onCreated: (newDoc: DocumentSummary, options?: { originalFile?: File | null }) => void;
 }
 
 type SourceTab = 'upload' | 'url' | 'paste' | 'library';
@@ -369,7 +370,8 @@ export const NewSummaryModal: React.FC<NewSummaryModalProps> = ({
     const stamp = Date.now();
 
     const newDoc: DocumentSummary = {
-      id: `doc-${stamp}`,
+      id: newId(),
+      createdAt: new Date(stamp).toISOString(),
       title: finalTitle,
       dateBadge: 'Today',
       timeAgoGroup: 'Last 7 days',
@@ -412,7 +414,7 @@ export const NewSummaryModal: React.FC<NewSummaryModalProps> = ({
       },
     };
 
-    onCreated(newDoc);
+    onCreated(newDoc, { originalFile: sourceType === 'upload' ? pickedFile : null });
     resetForm();
     onClose();
   };

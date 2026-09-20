@@ -64,6 +64,9 @@ export interface DocumentSummary {
   excerpt: string;
   createdDate: string;
   lastEditedDate?: string;
+  /** ISO timestamps from the database; the display strings above are derived from these. */
+  createdAt?: string;
+  updatedAt?: string;
   emotionalTone: string;
   promptQuestion?: string;
   contentParagraphs: string[];
@@ -110,6 +113,7 @@ export type ApiErrorCode =
   | 'unprocessable'
   | 'upstream_error'
   | 'not_implemented'
+  | 'service_unavailable'
   | 'internal_error';
 
 export interface ApiErrorDetail {

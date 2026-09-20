@@ -12,12 +12,14 @@ AI-assisted summarization of university academic materials (lecture notes, paper
 
 - Node.js >= 20 (developed on 22)
 - A Groq API key (server-side only; free tier available at https://console.groq.com/keys). Groq serves open-weights models through LangChain.
+- A Supabase project (free tier is fine) for sign-in and storage. Run `supabase/migrations/*.sql` in its SQL editor, enable the Email and Google providers, then set `SUPABASE_URL`, `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` in `.env`. Without them the app still starts, but nobody can sign in.
+- Docker, only for `npm run test:rls` (see Scripts).
 
 ## Setup
 
 ```bash
 npm ci
-cp .env.example .env      # then set GROQ_API_KEY
+cp .env.example .env      # then set GROQ_API_KEY and the Supabase values (see below)
 npm run dev               # API on :3001 + web app on :3000
 ```
 
@@ -44,7 +46,7 @@ CLIENT_PORT=3100 npm run dev
 
 ## Configuration
 
-All variables are read by the server only (`server/lib/env.ts`) and validated at start-up. The server exits with a readable message if `GROQ_API_KEY` is missing or still the placeholder. Never prefix a secret with `VITE_`: that would ship it to the browser.
+All variables except the two public `VITE_SUPABASE_*` ones are read by the server only (`server/lib/env.ts`) and validated at start-up. The server exits with a readable message if `GROQ_API_KEY` is missing or still the placeholder. Never prefix a secret with `VITE_`: that would ship it to the browser.
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -55,6 +57,10 @@ All variables are read by the server only (`server/lib/env.ts`) and validated at
 | `LLM_TIMEOUT_MS` | `60000` | Per-request timeout to the model |
 | `LLM_MAX_RETRIES` | `3` | Automatic retries on 429/5xx |
 | `GROQ_BASE_URL` | Groq's API | Optional proxy / compatible server |
+| `SUPABASE_URL` | required in production | Supabase project URL; the server fetches its public keys from it to verify sign-in tokens |
+| `SUPABASE_JWT_SECRET` | unset | Only for projects still on the legacy HS256 secret |
+| `AUTH_MODE` | `required` | `off` skips the token check (local experiments only; refused in production) |
+| `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` | required for sign-in | The browser's Supabase client. Public by design; Row Level Security protects the data |
 | `PORT` | `3001` | API port (Cloud Run injects this) |
 | `NODE_ENV` | `development` | `development`, `production` or `test` |
 | `APP_URL` | unset | Public URL of the deployment |
@@ -134,7 +140,10 @@ The target pipeline follows the 6-stage workflow in the project documentation: i
 ## Security notes
 
 - The Groq key lives only in the server process (in a git-ignored `.env`). `npm run verify:bundle` runs in CI to prove it never reaches the client bundle.
-- Auth and storage in the UI are still **simulated in the browser** (`src/lib/supabaseAuth.ts`, `localStorage`) until Phase 4. Do not treat them as real access control.
+- Sign-in is real Supabase Auth (email/password, magic link, Google). The server verifies the Supabase access token on every `/api` route except `/api/health` (`server/middleware/auth.ts`), accepts only user sessions (not the public anon key), and takes the audience, issuer and algorithm from configuration, never from the token.
+- Each student's data is isolated by Row Level Security on every table and on the private `uploads` storage bucket (`supabase/migrations`). Roles live in `profiles.role`; a user cannot change their own, and sign-up cannot request `faculty`. There is no sharing model yet, so no role can read another user's documents.
+- The workspace is unreachable while signed out; the UI shows only the Landing page. Summaries saved in `localStorage` before accounts existed are offered for a one-time import into the signed-in account.
+- `npm run test:rls` runs the schema and isolation tests against disposable Postgres and PostgREST containers (needs Docker), including that two accounts cannot see or modify each other's rows or files.
 - Accounts in `DEMO_CAMPUS_ACCOUNTS` are fictional (`*.example` addresses).
 
 ## CI

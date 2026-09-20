@@ -35,7 +35,7 @@ import {
   ChevronDown
 } from 'lucide-react';
 import { DocumentSummary } from '../types';
-import { supabase, AcademicUser, AcademicSession } from '../lib/supabaseAuth';
+import { auth, useAuth } from '../lib/auth';
 import { SupabaseAuthModal } from './SupabaseAuthModal';
 import { WatchDemoModal } from './WatchDemoModal';
 
@@ -58,7 +58,8 @@ export const LandingView: React.FC<LandingViewProps> = ({
   const [scrollY, setScrollY] = useState(0);
 
   // Supabase Auth state
-  const [session, setSession] = useState<AcademicSession | null>(() => supabase.getSession());
+  const authState = useAuth();
+  const session = authState.status === 'signedIn' ? authState : null;
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [isWatchDemoOpen, setIsWatchDemoOpen] = useState(false);
   const [showRlsModal, setShowRlsModal] = useState(false);
@@ -129,14 +130,6 @@ export const LandingView: React.FC<LandingViewProps> = ({
   const [demoMode, setDemoMode] = useState<'abstractive' | 'extractive'>('abstractive');
   const [isSynthesizing, setIsSynthesizing] = useState(false);
   const currentSample = demoSamples[activeDemoIndex];
-
-  // Supabase Auth listener
-  useEffect(() => {
-    const unsub = supabase.onAuthStateChange((newSession) => {
-      setSession(newSession);
-    });
-    return unsub;
-  }, []);
 
   // Window scroll event listener for multi-layer parallax depth
   useEffect(() => {
@@ -258,10 +251,9 @@ export const LandingView: React.FC<LandingViewProps> = ({
           {session ? (
             /* Authenticated User: routes straight to Dashboard */
             <div className="flex items-center gap-2">
-              <div 
-                onClick={() => setIsAuthModalOpen(true)}
-                className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 bg-slate-100 hover:bg-slate-200 rounded-full text-xs font-medium text-slate-700 cursor-pointer transition-colors"
-                title="Supabase Auth Session Active"
+              <div
+                className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 bg-slate-100 rounded-full text-xs font-medium text-slate-700"
+                title="Signed in"
               >
                 <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
                 <span className="font-bold text-slate-900 truncate max-w-[90px]">
@@ -269,6 +261,13 @@ export const LandingView: React.FC<LandingViewProps> = ({
                 </span>
                 <span className="text-[10px] text-slate-500 capitalize">({session.user.role})</span>
               </div>
+
+              <button
+                onClick={() => void auth.signOut()}
+                className="px-3 py-1.5 rounded-full text-xs font-bold text-slate-600 hover:text-slate-950 hover:bg-slate-100 transition-colors"
+              >
+                Sign out
+              </button>
 
               <button
                 onClick={() => onLaunchApp('Dashboard')}
