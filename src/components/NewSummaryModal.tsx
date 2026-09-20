@@ -16,7 +16,7 @@ import {
 import { DocumentSummary, ExtractionResult, SourceMetadata, SummarizeProgress, SummaryResult } from '../types';
 import { cn } from '../lib/utils';
 import { useAuthUser } from '../lib/useAuthUser';
-import { newId } from '../lib/repository';
+import { newId, dateBadge, timeAgoGroup, formatCreated } from '../lib/repository';
 import { ACCEPTED_EXTENSIONS, MAX_UPLOAD_MB, describeApiError, extractDocument, summarizeDocument, type ExtractInput } from '../lib/api';
 
 interface NewSummaryModalProps {
@@ -368,24 +368,21 @@ export const NewSummaryModal: React.FC<NewSummaryModalProps> = ({
       sampleFileName ??
       `${finalTitle.toLowerCase().replace(/\s+/g, '_')}.txt`;
     const stamp = Date.now();
+    const created = new Date(stamp).toISOString();
 
     const newDoc: DocumentSummary = {
       id: newId(),
-      createdAt: new Date(stamp).toISOString(),
+      createdAt: created,
       title: finalTitle,
-      dateBadge: 'Today',
-      timeAgoGroup: 'Last 7 days',
+      dateBadge: dateBadge(created),
+      timeAgoGroup: timeAgoGroup(created),
       category: category,
       categoryColor: catColor,
-      extraCount: 1,
       tags: summary.tags.length ? summary.tags : [category],
       excerpt: summary.excerpt,
-      createdDate: new Date().toLocaleDateString('en-US', {
-        month: 'long',
-        day: '2-digit',
-        year: 'numeric',
-      }) + ' ' + new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
-      lastEditedDate: 'Today',
+      createdDate: formatCreated(created),
+      lastEditedDate: dateBadge(created),
+      updatedAt: created,
       emotionalTone: summary.emotionalTone,
       promptQuestion: summary.promptQuestion,
       contentParagraphs: summary.contentParagraphs,

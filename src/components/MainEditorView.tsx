@@ -35,7 +35,10 @@ import {
   CheckCircle2,
   AlertCircle
 } from 'lucide-react';
-import { DocumentSummary, DiscussionQuestion, ReviewMilestoneTask } from '../types';
+import { DocumentSummary, DiscussionQuestion, ReviewMilestoneTask, TranslationLanguage } from '../types';
+import { describeApiError, translateSummary } from '../lib/api';
+import { contentIn, languagesOf, originalLanguage, toTranslateRequest } from '../lib/documentView';
+import { LanguageSwitcher } from './LanguageSwitcher';
 import { getCategoryBadgeStyles, cn } from '../lib/utils';
 import { ReviewProgressBar } from './ReviewProgressBar';
 
@@ -44,7 +47,8 @@ interface MainEditorViewProps {
   onUpdateDocument: (updated: DocumentSummary) => void;
   onToggleComments: () => void;
   isCommentsOpen: boolean;
-  onExport: (format: 'pdf' | 'docx' | 'txt' | 'md') => void;
+  /** `language` is the language of the summary as currently shown. */
+  onExport: (format: 'pdf' | 'docx' | 'txt' | 'md', language: string) => void;
 }
 
 export const MainEditorView: React.FC<MainEditorViewProps> = ({
@@ -65,6 +69,69 @@ export const MainEditorView: React.FC<MainEditorViewProps> = ({
   const [isStrike, setIsStrike] = useState(false);
   const [alignment, setAlignment] = useState<'left' | 'center' | 'right'>('left');
   
+  // Which language the summary is shown in (null = the document's own), and translation progress
+  const [viewLanguage, setViewLanguage] = useState<string | null>(null);
+  const [translating, setTranslating] = useState<string | null>(null);
+  const [translateError, setTranslateError] = useState<string | null>(null);
+  const translateAbortRef = useRef<AbortController | null>(null);
+  const latestDocRef = useRef(currentDoc);
+  latestDocRef.current = currentDoc;
+  const language = viewLanguage && languagesOf(currentDoc).includes(viewLanguage) ? viewLanguage : originalLanguage(currentDoc);
+  const view = contentIn(currentDoc, language);
+
+  // Another document was opened: forget the language choice and stop any translation in flight.
+  useEffect(() => {
+    setViewLanguage(null);
+    setTranslateError(null);
+    setTranslating(null);
+    translateAbortRef.current?.abort();
+    translateAbortRef.current = null;
+    return () => translateAbortRef.current?.abort();
+  }, [currentDoc.id]);
+
+  const handleCancelTranslate = () => {
+    translateAbortRef.current?.abort();
+    translateAbortRef.current = null;
+    setTranslating(null);
+  };
+
+  const handleTranslate = async (target: string) => {
+    if (translating) return;
+    const controller = new AbortController();
+    translateAbortRef.current = controller;
+    setTranslating(target);
+    setTranslateError(null);
+    try {
+      const result = await translateSummary(toTranslateRequest(currentDoc, target as TranslationLanguage), { signal: controller.signal });
+      if (controller.signal.aborted) return;
+      // Keep any edits made while the model was working.
+      const latest = latestDocRef.current;
+      onUpdateDocument({
+        ...latest,
+        translations: {
+          ...latest.translations,
+          [result.language]: {
+            contentParagraphs: result.contentParagraphs,
+            bulletPoints: result.bulletPoints,
+            discussionQuestions: result.discussionQuestions,
+            promptQuestion: result.promptQuestion,
+            model: result.model,
+            warnings: result.warnings.length ? result.warnings : undefined,
+          },
+        },
+      });
+      setViewLanguage(result.language);
+    } catch (err) {
+      if (controller.signal.aborted || (err instanceof DOMException && err.name === 'AbortError')) return;
+      setTranslateError(describeApiError(err));
+    } finally {
+      if (translateAbortRef.current === controller) {
+        translateAbortRef.current = null;
+        setTranslating(null);
+      }
+    }
+  };
+
   // Search within document
   const [showDocSearch, setShowDocSearch] = useState(false);
   const [docSearchQuery, setDocSearchQuery] = useState('');
@@ -274,7 +341,7 @@ export const MainEditorView: React.FC<MainEditorViewProps> = ({
         completedTaskIds: allTaskIds,
         reviewedBulletIndices: allBulletsReviewed.map((_, i) => i),
         isFullyReviewed: true,
-        lastReviewedAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        lastReviewedAt: new Date().toISOString(),
         preferredMode: progressMode,
       },
     });
@@ -412,7 +479,7 @@ export const MainEditorView: React.FC<MainEditorViewProps> = ({
   };
 
   const handleCopySummary = () => {
-    const textToCopy = `${currentDoc.title}\n\n${currentDoc.contentParagraphs.join('\n\n')}\n\n${currentDoc.bulletPoints.map(b => `${b.title} ${b.text}`).join('\n')}`;
+    const textToCopy = `${currentDoc.title}\n\n${view.contentParagraphs.join('\n\n')}\n\n${view.bulletPoints.map(b => `${b.title} ${b.text}`).join('\n')}`;
     navigator.clipboard.writeText(textToCopy);
     setIsCopied(true);
     setTimeout(() => setIsCopied(false), 2000);
@@ -437,7 +504,7 @@ export const MainEditorView: React.FC<MainEditorViewProps> = ({
     }, 800);
   };
 
-  const activeQuestion = currentDoc.discussionQuestions[currentDoc.currentDiscussionIndex] || {
+  const activeQuestion = view.discussionQuestions[currentDoc.currentDiscussionIndex] || {
     question: 'What small steps have helped you feel more confident lately?',
     context: 'Start writing and we will soon create an additional question to help you.',
   };
@@ -465,12 +532,23 @@ export const MainEditorView: React.FC<MainEditorViewProps> = ({
             >
               {currentDoc.title}
             </h1>
+            <div className="mt-2">
+              <LanguageSwitcher
+                document={currentDoc}
+                value={language}
+                onChange={setViewLanguage}
+                onTranslate={handleTranslate}
+                onCancel={handleCancelTranslate}
+                translating={translating}
+                error={translateError}
+              />
+            </div>
           </div>
 
           {/* Right Action Icons matching image.png: Edited Dec 02, Comment icon with badge, Search icon, More icon */}
           <div className="flex items-center gap-2 shrink-0">
             <span className="text-xs text-slate-400 font-medium hidden sm:inline">
-              Edited {currentDoc.lastEditedDate || 'Dec 02'}
+              Edited {currentDoc.lastEditedDate || currentDoc.dateBadge}
             </span>
 
             {/* Comment icon button */}
@@ -525,25 +603,32 @@ export const MainEditorView: React.FC<MainEditorViewProps> = ({
                     Export Summary
                   </div>
                   <button
-                    onClick={() => { onExport('pdf'); setShowExportMenu(false); }}
+                    onClick={() => { onExport('pdf', language); setShowExportMenu(false); }}
                     className="w-full text-left px-2.5 py-1.5 hover:bg-slate-50 rounded-lg flex items-center gap-2 text-slate-700"
                   >
                     <Download className="w-3.5 h-3.5 text-slate-400" />
                     <span>Download as PDF</span>
                   </button>
                   <button
-                    onClick={() => { onExport('docx'); setShowExportMenu(false); }}
+                    onClick={() => { onExport('docx', language); setShowExportMenu(false); }}
                     className="w-full text-left px-2.5 py-1.5 hover:bg-slate-50 rounded-lg flex items-center gap-2 text-slate-700"
                   >
                     <Download className="w-3.5 h-3.5 text-slate-400" />
                     <span>Download as Word (.docx)</span>
                   </button>
                   <button
-                    onClick={() => { onExport('txt'); setShowExportMenu(false); }}
+                    onClick={() => { onExport('txt', language); setShowExportMenu(false); }}
                     className="w-full text-left px-2.5 py-1.5 hover:bg-slate-50 rounded-lg flex items-center gap-2 text-slate-700"
                   >
                     <Download className="w-3.5 h-3.5 text-slate-400" />
                     <span>Plain Text (.txt)</span>
+                  </button>
+                  <button
+                    onClick={() => { onExport('md', language); setShowExportMenu(false); }}
+                    className="w-full text-left px-2.5 py-1.5 hover:bg-slate-50 rounded-lg flex items-center gap-2 text-slate-700"
+                  >
+                    <Download className="w-3.5 h-3.5 text-slate-400" />
+                    <span>Markdown (.md)</span>
                   </button>
                   <div className="border-t border-slate-100 my-1"></div>
                   <button
@@ -922,28 +1007,28 @@ export const MainEditorView: React.FC<MainEditorViewProps> = ({
             <div className="space-y-6">
               
               {/* Question / Prompt Header matching image.png */}
-              {currentDoc.promptQuestion && (
+              {view.promptQuestion && (
                 <div className="flex items-start gap-2.5">
                   <div className="w-4 h-4 rounded-full bg-slate-900 text-white flex items-center justify-center text-[10px] font-bold shrink-0 mt-0.5">
                     ?
                   </div>
                   <h2 className="text-sm font-bold text-slate-900 tracking-tight leading-snug">
-                    {currentDoc.promptQuestion}
+                    {view.promptQuestion}
                   </h2>
                 </div>
               )}
 
               {/* Introductory paragraphs */}
-              {currentDoc.contentParagraphs.map((para, i) => (
+              {view.contentParagraphs.map((para, i) => (
                 <p key={i} className="text-xs text-slate-700 leading-relaxed">
                   {para}
                 </p>
               ))}
 
               {/* Things the reader should double-check (e.g. figures not found in the source) */}
-              {currentDoc.summaryWarnings && currentDoc.summaryWarnings.length > 0 && (
+              {view.warnings.length > 0 && (
                 <ul className="space-y-1 rounded-xl bg-amber-50 border border-amber-200 p-2.5 text-[11px] text-amber-900">
-                  {currentDoc.summaryWarnings.map((w) => (
+                  {view.warnings.map((w) => (
                     <li key={w} className="flex gap-1.5">
                       <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-px text-amber-600" />
                       <span>{w}</span>
@@ -954,7 +1039,7 @@ export const MainEditorView: React.FC<MainEditorViewProps> = ({
 
               {/* Bullet points with bold lead-ins and interactive review checkboxes */}
               <div className="space-y-3 relative">
-                {currentDoc.bulletPoints.map((item, idx) => {
+                {view.bulletPoints.map((item, idx) => {
                   const isReviewed = !!item.reviewed;
                   return (
                     <div 
@@ -1004,7 +1089,7 @@ export const MainEditorView: React.FC<MainEditorViewProps> = ({
                     className="flex items-center gap-1 text-[11px] font-semibold text-slate-400 hover:text-emerald-700 bg-slate-50 hover:bg-emerald-50 px-1.5 py-0.5 rounded-md border border-slate-200/80 transition-colors"
                   >
                     <MessageSquare className="w-3 h-3" />
-                    <span>{currentDoc.comments.length || 2}</span>
+                    <span>{currentDoc.comments.length}</span>
                   </button>
                 </div>
               </div>
@@ -1212,7 +1297,7 @@ export const MainEditorView: React.FC<MainEditorViewProps> = ({
             </button>
             <button
               onClick={() => {
-                onExport('pdf');
+                onExport('pdf', language);
                 setShowBottomAIOptions(false);
               }}
               className="w-full text-left px-2.5 py-1.5 hover:bg-slate-50 rounded-lg flex items-center gap-2 text-slate-700"

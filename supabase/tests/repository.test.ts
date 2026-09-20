@@ -193,6 +193,59 @@ describe.skipIf(!dbUrl || !restUrl || !jwtSecret)('repository against Postgres +
     expect(got.contentParagraphs).toEqual(doc.contentParagraphs);
   });
 
+  it('stores a translation as its own row, reads it back, and saves only what changed', async () => {
+    const doc = makeDoc();
+    await alice.create(doc);
+    await alice.list();
+
+    const sw = {
+      contentParagraphs: ['Nodi hukubaliana kwa kutumia akidi.', 'Raft huchagua kiongozi.'],
+      bulletPoints: [
+        {title: 'Akidi.', text: 'Kura ya walio wengi.'},
+        {title: 'Viongozi.', text: 'Kiongozi mmoja hupanga maandishi.'},
+      ],
+      discussionQuestions: [{question: 'Kwa nini wingi?', context: 'Migawanyiko.'}],
+      promptQuestion: 'Akidi husaidiaje?',
+      model: 'openai/gpt-oss-120b',
+      warnings: ['Angalia takwimu 34%.'],
+    };
+
+    requests = [];
+    await alice.save({...doc, translations: {Swahili: sw}});
+    expect(writes()).toEqual(['POST /summaries']); // only the new language row
+
+    requests = [];
+    await alice.save({...doc, translations: {Swahili: sw}});
+    expect(writes()).toEqual([]);
+
+    const [got] = await alice.list();
+    // The original is untouched, and the translation is not mistaken for it.
+    expect(got.contentParagraphs).toEqual(doc.contentParagraphs);
+    expect(got.translations).toEqual({Swahili: sw});
+
+    const {rows} = await admin.query(`select language, model from summaries order by language`);
+    expect(rows).toEqual([
+      {language: 'English', model: 'openai/gpt-oss-120b'},
+      {language: 'Swahili', model: 'openai/gpt-oss-120b'},
+    ]);
+
+    // Editing the translation rewrites that row only.
+    requests = [];
+    await alice.save({...doc, translations: {Swahili: {...sw, contentParagraphs: ['Imebadilishwa.', 'Raft huchagua kiongozi.']}}});
+    expect(writes()).toEqual(['POST /summaries']);
+    expect((await alice.list())[0].translations?.Swahili.contentParagraphs[0]).toBe('Imebadilishwa.');
+  });
+
+  it('creates a document together with its translations, and deletes them with it', async () => {
+    const doc = makeDoc({
+      translations: {Swahili: {contentParagraphs: ['Habari.'], bulletPoints: [], discussionQuestions: []}},
+    });
+    await alice.create(doc);
+    expect((await alice.list())[0].translations?.Swahili.contentParagraphs).toEqual(['Habari.']);
+    await alice.remove(doc.id);
+    expect((await admin.query(`select 1 from summaries`)).rowCount).toBe(0);
+  });
+
   it('keeps review progress', async () => {
     const doc = makeDoc();
     await alice.create(doc);

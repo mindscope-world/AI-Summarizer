@@ -123,6 +123,24 @@ Behaviour worth knowing:
 
 Known limits: multi-column PDF layouts are read in the order pdf.js provides (columns can interleave); tables become plain lines; legacy `.doc`, images and PDFs over 18 MB needing OCR are not supported; DOCX archives are not yet inspected for decompression bombs (Phase 7).
 
+## Export (`POST /api/export`)
+
+Sends a summary in, returns a real file out: `pdf`, `docx`, `txt` or `md`. The browser posts the summary as it is on screen (so unsaved edits, the student's own notes and any translation are included), and nothing is stored on the server.
+
+```json
+{"format": "pdf", "document": {"title": "…", "language": "English", "contentParagraphs": ["…"], "bulletPoints": [{"title": "…", "text": "…"}], "discussionQuestions": [{"question": "…", "context": "…"}], "userNotes": "…"}}
+```
+
+- **PDF** (`pdfkit`): A4, real selectable text, headings, bullets, numbered questions, page numbers, document properties. It uses the standard PDF fonts, which cover English, Swahili and French; any other character becomes `?` and the response carries an `X-Export-Warning` header, which the app shows. Use Word or text for those.
+- **DOCX** (`docx`): styled headings, true bullet and numbered lists, page numbers, document properties.
+- **TXT / MD**: the same content as plain text or Markdown.
+- Headings are in the summary's language (Swahili summaries get Swahili headings). File names are ASCII, made from the title.
+- The endpoint takes the summary in the request rather than reading it from the database by id (as `plan.md` first sketched), because the server has no database access of its own and this way an export always matches what the student is looking at.
+
+## Translation (`POST /api/translate`)
+
+Translates a structured summary between English and Swahili with the same open-weights model that wrote it. The result lines up with the original item for item (same number of paragraphs, key points and questions), so review ticks and the current question carry over. The model is asked again once if the counts do not match, and the response carries a warning if a figure appears in the translation that is not in the original. Translations are stored as extra rows in `summaries` (one per language) and can be switched in the editor and exported. French is not offered yet.
+
 ## Request flow
 
 `requestId` -> `accessLog` -> security headers -> CORS -> rate limit -> JSON parse -> route (`validate` first) -> `errorHandler`.

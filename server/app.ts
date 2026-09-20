@@ -18,6 +18,7 @@ import {createChatModel} from './ai/model';
 import {createLlmOcr} from './pipeline/ocr';
 import type {IngestDeps} from './pipeline/ingest';
 import {createSummarizeRouter} from './routes/summarize';
+import {createTranslateRouter} from './routes/translate';
 
 export interface AppOptions {
   env: Env;
@@ -67,7 +68,7 @@ export function createApp({env, logger, staticDir, ingestion}: AppOptions): Expr
   api.use(
     cors({
       origin: env.CORS_ORIGINS.length ? env.CORS_ORIGINS : false,
-      exposedHeaders: ['x-request-id', 'RateLimit', 'RateLimit-Policy', 'Retry-After'],
+      exposedHeaders: ['x-request-id', 'RateLimit', 'RateLimit-Policy', 'Retry-After', 'Content-Disposition', 'X-Export-Warning'],
     }),
   );
   // Public: uptime probes and the Settings "test connection" work without signing in.
@@ -77,8 +78,10 @@ export function createApp({env, logger, staticDir, ingestion}: AppOptions): Expr
   api.use(createRateLimiter(env.RATE_LIMIT_PER_MINUTE));
   api.use(express.json({limit: env.JSON_BODY_LIMIT}));
   api.use(createExtractRouter({env, logger, ingestion: ingestDeps}));
-  api.use(createSummarizeRouter({env, logger, llm: createLlmGateway(env)}));
-  api.use(createExportRouter());
+  const llm = createLlmGateway(env);
+  api.use(createSummarizeRouter({env, logger, llm}));
+  api.use(createTranslateRouter({env, logger, llm}));
+  api.use(createExportRouter({logger}));
   api.use(createFeedbackRouter());
   api.use(apiNotFound);
   app.use('/api', api);

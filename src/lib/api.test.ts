@@ -3,13 +3,16 @@ import {
   ApiError,
   apiRequest,
   describeApiError,
+  exportDocument,
   extractDocument,
+  fileNameFromDisposition,
   getApiBase,
   getHealth,
   normalizeApiBase,
   setAccessTokenProvider,
   setApiBase,
   summarizeDocument,
+  translateSummary,
 } from './api';
 import type {SummaryResult} from './../types';
 
@@ -322,5 +325,69 @@ describe('sending the signed-in user’s token', () => {
     controller.abort();
     await expect(pending).rejects.toMatchObject({name: 'AbortError'});
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('exportDocument', () => {
+  const doc = {title: 'Consensus', contentParagraphs: ['p'], bulletPoints: [], discussionQuestions: []};
+
+  it('posts the summary and returns the file with the name the server chose', async () => {
+    setAccessTokenProvider(async () => 'jwt-abc');
+    const fetchMock = mockFetch(
+      () =>
+        new Response(new Uint8Array([0x25, 0x50, 0x44, 0x46]), {
+          headers: {
+            'content-type': 'application/pdf',
+            'content-disposition': `attachment; filename="consensus_summary.pdf"; filename*=UTF-8''consensus_summary.pdf`,
+          },
+        }),
+    );
+    const file = await exportDocument('pdf', doc);
+    expect(file.fileName).toBe('consensus_summary.pdf');
+    expect(file.blob.size).toBe(4);
+    expect(file.warning).toBeUndefined();
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('/api/export');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body as string)).toEqual({format: 'pdf', document: doc});
+    expect((init.headers as Record<string, string>).Authorization).toBe('Bearer jwt-abc');
+    setAccessTokenProvider(null);
+  });
+
+  it('passes on the server’s warning about characters that could not be shown', async () => {
+    mockFetch(() => new Response('x', {headers: {'x-export-warning': encodeURIComponent('3 characters could not be shown.')}}));
+    expect((await exportDocument('pdf', doc)).warning).toBe('3 characters could not be shown.');
+  });
+
+  it('turns server errors into ApiErrors instead of saving an error page as a file', async () => {
+    mockFetch(() => json({error: {code: 'unauthorized', message: 'Sign in to use this feature.', requestId: 'r1'}}, {status: 401}));
+    await expect(exportDocument('docx', doc)).rejects.toMatchObject({code: 'unauthorized', status: 401});
+    mockFetch(() => new Response('<html>bad gateway</html>', {status: 502}));
+    await expect(exportDocument('docx', doc)).rejects.toMatchObject({code: 'http_error', status: 502});
+  });
+
+  it('reads file names from either form of Content-Disposition, with a fallback', () => {
+    expect(fileNameFromDisposition(`attachment; filename="a_summary.docx"; filename*=UTF-8''b%20c.docx`, 'docx')).toBe('b c.docx');
+    expect(fileNameFromDisposition('attachment; filename="a_summary.txt"', 'txt')).toBe('a_summary.txt');
+    expect(fileNameFromDisposition(null, 'md')).toBe('summary.md');
+  });
+});
+
+describe('translateSummary', () => {
+  it('posts the summary and returns the translation', async () => {
+    const reply = {language: 'Swahili', model: 'm', warnings: [], contentParagraphs: ['Habari.'], bulletPoints: [], discussionQuestions: []};
+    const fetchMock = mockFetch(() => json(reply));
+    const input = {targetLanguage: 'Swahili' as const, contentParagraphs: ['Hello.'], bulletPoints: [], discussionQuestions: []};
+    expect(await translateSummary(input)).toEqual(reply);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('/api/translate');
+    expect(JSON.parse(init.body as string)).toEqual(input);
+  });
+
+  it('surfaces the server’s message when the model fails', async () => {
+    mockFetch(() => json({error: {code: 'upstream_error', message: 'Translation failed: the AI service is busy.', requestId: 'r'}}, {status: 502}));
+    const err = await translateSummary({targetLanguage: 'Swahili', contentParagraphs: ['x'], bulletPoints: [], discussionQuestions: []}).catch((e) => e);
+    expect(describeApiError(err)).toBe('Translation failed: the AI service is busy.');
   });
 });

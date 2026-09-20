@@ -3,6 +3,8 @@ import type {
   ApiErrorCode,
   ApiErrorDetail,
   DetectedLanguage,
+  ExportDocument,
+  ExportFormat,
   ExtractionResult,
   HealthResponse,
   SummarizeEvent,
@@ -11,6 +13,8 @@ import type {
   SummaryLength,
   SummaryMode,
   SummaryResult,
+  TranslateRequest,
+  TranslateResponse,
 } from '../types';
 
 export const DEFAULT_API_BASE = '/api';
@@ -98,11 +102,12 @@ export interface RequestOptions {
   baseUrl?: string;
 }
 
-export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
+/** Sends a request and returns the response once it is known to be a success; failures throw an ApiError. */
+async function request(path: string, options: RequestOptions, accept: string): Promise<Response> {
   const {method = 'GET', body, signal, timeoutMs = DEFAULT_TIMEOUT_MS, baseUrl} = options;
   const base = baseUrl ? (normalizeApiBase(baseUrl) ?? DEFAULT_API_BASE) : getApiBase();
 
-  const headers: Record<string, string> = {Accept: 'application/json', ...(await authorizationHeader())};
+  const headers: Record<string, string> = {Accept: accept, ...(await authorizationHeader())};
   // The caller may have cancelled while we were fetching the token.
   if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
   let payload: BodyInit | undefined;
@@ -134,7 +139,26 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
     signal?.removeEventListener('abort', onCallerAbort);
   }
 
-  const requestId = res.headers.get('x-request-id') ?? undefined;
+  if (!res.ok) {
+    const requestId = res.headers.get('x-request-id') ?? undefined;
+    const text = await res.text().catch(() => '');
+    let json: unknown;
+    try {
+      json = text ? JSON.parse(text) : undefined;
+    } catch {
+      json = undefined;
+    }
+    const apiError = (json as Partial<ApiErrorBody> | undefined)?.error;
+    if (apiError?.code && apiError.message) {
+      throw new ApiError(apiError.message, res.status, apiError.code, apiError.requestId ?? requestId, apiError.details);
+    }
+    throw new ApiError(`Server responded with HTTP ${res.status}.`, res.status, 'http_error', requestId);
+  }
+  return res;
+}
+
+export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  const res = await request(path, options, 'application/json');
   const text = await res.text();
   let json: unknown;
   try {
@@ -142,17 +166,8 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
   } catch {
     json = undefined;
   }
-
-  if (!res.ok) {
-    const apiError = (json as Partial<ApiErrorBody> | undefined)?.error;
-    if (apiError?.code && apiError.message) {
-      throw new ApiError(apiError.message, res.status, apiError.code, apiError.requestId ?? requestId, apiError.details);
-    }
-    throw new ApiError(`Server responded with HTTP ${res.status}.`, res.status, 'http_error', requestId);
-  }
-
   if (json === undefined) {
-    throw new ApiError('The server returned an empty or non-JSON response.', res.status, 'invalid_response', requestId);
+    throw new ApiError('The server returned an empty or non-JSON response.', res.status, 'invalid_response', res.headers.get('x-request-id') ?? undefined);
   }
   return json as T;
 }
@@ -317,6 +332,57 @@ export async function summarizeDocument(
 }
 
 /** Turns any error from the API into a sentence a student can act on. */
+// ---------------------------------------------------------------------------
+// Export and translation
+// ---------------------------------------------------------------------------
+
+export interface ExportedFile {
+  blob: Blob;
+  fileName: string;
+  /** Something the reader should know about the file (e.g. characters a PDF could not show). */
+  warning?: string;
+}
+
+/** The name in a Content-Disposition header, or a fallback built from the format. */
+export function fileNameFromDisposition(header: string | null, format: ExportFormat): string {
+  const star = header && /filename\*=UTF-8''([^;]+)/i.exec(header);
+  if (star) {
+    try {
+      return decodeURIComponent(star[1].trim());
+    } catch {
+      /* fall through */
+    }
+  }
+  const plain = header && /filename="?([^";]+)"?/i.exec(header);
+  return plain ? plain[1].trim() : `summary.${format}`;
+}
+
+/** Asks the server to render a summary as a real PDF, Word, text or Markdown file. */
+export async function exportDocument(
+  format: ExportFormat,
+  document: ExportDocument,
+  options: Pick<RequestOptions, 'signal' | 'timeoutMs' | 'baseUrl'> = {},
+): Promise<ExportedFile> {
+  const res = await request('/export', {method: 'POST', body: {format, document}, timeoutMs: 60_000, ...options}, '*/*');
+  const blob = await res.blob();
+  const warning = res.headers.get('x-export-warning');
+  return {
+    blob,
+    fileName: fileNameFromDisposition(res.headers.get('content-disposition'), format),
+    warning: warning ? decodeURIComponent(warning) : undefined,
+  };
+}
+
+/** Translating goes through the language model, which can be slow on a free-tier rate limit. */
+const TRANSLATE_TIMEOUT_MS = 180_000;
+
+export function translateSummary(
+  input: TranslateRequest,
+  options: Pick<RequestOptions, 'signal' | 'timeoutMs' | 'baseUrl'> = {},
+): Promise<TranslateResponse> {
+  return apiRequest<TranslateResponse>('/translate', {method: 'POST', body: input, timeoutMs: TRANSLATE_TIMEOUT_MS, ...options});
+}
+
 export function describeApiError(err: unknown): string {
   if (err instanceof ApiError) {
     switch (err.code) {

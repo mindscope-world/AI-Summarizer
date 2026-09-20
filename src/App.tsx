@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Navbar } from './components/Navbar';
 import { SidebarHistory } from './components/SidebarHistory';
 import { MainEditorView } from './components/MainEditorView';
@@ -16,7 +16,10 @@ import { NewSummaryModal } from './components/NewSummaryModal';
 import { ArchitectureModal } from './components/ArchitectureModal';
 import { SettingsModal } from './components/SettingsModal';
 import { CommentsDrawer } from './components/CommentsDrawer';
-import { DocumentSummary, NavigationTab, CommentItem } from './types';
+import { DocumentSummary, NavigationTab, CommentItem, ExportFormat } from './types';
+import { describeApiError, exportDocument } from './lib/api';
+import { toExportDocument } from './lib/documentView';
+import { saveBlob } from './lib/download';
 import { auth, useAuth } from './lib/auth';
 import { supabase } from './lib/supabase';
 import { createRepository, newId } from './lib/repository';
@@ -80,9 +83,11 @@ export default function App() {
     if (currentDocId && tab === 'Journal') void loadSource(currentDocId);
   }, [currentDocId, tab, loadSource]);
 
-  const showToast = (msg: string) => {
+  const toastTimer = useRef<ReturnType<typeof setTimeout>>();
+  const showToast = (msg: string, ms = 3000) => {
     setToastMessage(msg);
-    setTimeout(() => setToastMessage(null), 3000);
+    clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToastMessage(null), ms);
   };
 
   const handleUpdateDocument = docs.update;
@@ -140,30 +145,20 @@ export default function App() {
     showToast('Comment added.');
   };
 
-  const handleExport = (format: 'pdf' | 'docx' | 'txt' | 'md') => {
-    if (!currentDoc) return;
-    const filename = `${currentDoc.title.toLowerCase().replace(/[^a-z0-9]/g, '_')}_summary.${format}`;
-    const content = `# ${currentDoc.title}\n` +
-      `Date: ${currentDoc.createdDate}\n` +
-      `Institution: The East Africa University\n` +
-      `Category: ${currentDoc.category}\n` +
-      `Tags: ${currentDoc.tags.join(', ')}\n\n` +
-      `## Summary\n` +
-      `${currentDoc.contentParagraphs.join('\n\n')}\n\n` +
-      `## Salient Takeaways\n` +
-      `${currentDoc.bulletPoints.map(b => `- **${b.title}** ${b.text}`).join('\n')}\n\n` +
-      `## Discussion & Revision Questions\n` +
-      `${currentDoc.discussionQuestions.map((q, i) => `${i + 1}. ${q.question} (${q.context})`).join('\n')}\n\n` +
-      (currentDoc.userNotes ? `## Student Notes\n${currentDoc.userNotes}\n` : '');
-
-    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = filename;
-    link.click();
-    URL.revokeObjectURL(url);
-    showToast(`Exported ${filename} successfully!`);
+  const exporting = useRef(false);
+  const handleExport = async (format: ExportFormat, language: string) => {
+    if (!currentDoc || exporting.current) return;
+    exporting.current = true;
+    showToast(`Preparing your ${format.toUpperCase()} file...`);
+    try {
+      const file = await exportDocument(format, toExportDocument(currentDoc, language));
+      saveBlob(file.blob, file.fileName);
+      showToast(file.warning ?? `Exported ${file.fileName}.`, file.warning ? 8000 : undefined);
+    } catch (err) {
+      showToast(describeApiError(err), 6000);
+    } finally {
+      exporting.current = false;
+    }
   };
 
   return (
@@ -298,6 +293,7 @@ export default function App() {
             documents={documents}
             onSelectDoc={handleSelectDocument}
             onNewDocClick={() => setIsNewSummaryOpen(true)}
+            onUpdateDocument={handleUpdateDocument}
           />
         )}
 

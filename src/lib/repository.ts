@@ -1,5 +1,5 @@
 import type {SupabaseClient} from '@supabase/supabase-js';
-import type {CommentItem, DocumentReviewProgress, DocumentSummary, DiscussionQuestion, SourceMetadata} from '../types';
+import type {CommentItem, DocumentReviewProgress, DocumentSummary, DiscussionQuestion, SourceMetadata, TranslatedContent} from '../types';
 
 /**
  * Persistence for a signed-in user's documents. All access goes straight to Supabase from the
@@ -42,6 +42,8 @@ interface SummaryBody {
   bulletPoints: DocumentSummary['bulletPoints'];
   discussionQuestions: DiscussionQuestion[];
   warnings?: string[];
+  /** Only in translated rows: the document's own prompt question lives on the documents row. */
+  promptQuestion?: string;
 }
 
 interface DocumentRow {
@@ -65,6 +67,7 @@ interface DocumentRow {
 interface SummaryRow {
   body: SummaryBody;
   language: string;
+  model?: string | null;
 }
 interface CommentRow {
   id: string;
@@ -124,6 +127,19 @@ function toDocument(row: DocumentRow, now = Date.now()): DocumentSummary {
   const summaries = asArray(row.summaries);
   const summary = summaries.find((s) => s.language === (row.source_metadata?.language ?? 'English')) ?? summaries[0];
   const body: SummaryBody = summary?.body ?? {contentParagraphs: [], bulletPoints: [], discussionQuestions: []};
+  // Every other language is a translation of the summary above.
+  const translations: Record<string, TranslatedContent> = {};
+  for (const other of summaries) {
+    if (other === summary) continue;
+    translations[other.language] = {
+      contentParagraphs: other.body.contentParagraphs ?? [],
+      bulletPoints: (other.body.bulletPoints ?? []).map(({title, text}) => ({title, text})),
+      discussionQuestions: (other.body.discussionQuestions ?? []).map(({question, context}) => ({question, context})),
+      promptQuestion: other.body.promptQuestion || undefined,
+      model: other.model ?? undefined,
+      warnings: other.body.warnings?.length ? other.body.warnings : undefined,
+    };
+  }
   const comments: CommentItem[] = asArray(row.comments)
     .sort((a, b) => a.created_at.localeCompare(b.created_at))
     .map((c) => ({id: c.id, author: c.author_name, avatar: c.avatar_url ?? '', text: c.body, timestamp: relativeTime(c.created_at, now)}));
@@ -153,6 +169,7 @@ function toDocument(row: DocumentRow, now = Date.now()): DocumentSummary {
     sourceMetadata: row.source_metadata ?? {},
     reviewProgress: review && Object.keys(review).length ? review : undefined,
     summaryWarnings: body.warnings?.length ? body.warnings : undefined,
+    translations: Object.keys(translations).length ? translations : undefined,
   };
 }
 
@@ -160,6 +177,8 @@ function toDocument(row: DocumentRow, now = Date.now()): DocumentSummary {
 interface Parts {
   meta: Record<string, unknown>;
   summary: SummaryBody;
+  /** Translated summaries by language. */
+  translations: Record<string, {body: SummaryBody; model: string | null}>;
   review: DocumentReviewProgress | null;
   comments: CommentItem[];
 }
@@ -184,6 +203,22 @@ function partsOf(doc: DocumentSummary): Parts {
       discussionQuestions: doc.discussionQuestions,
       warnings: doc.summaryWarnings ?? [],
     },
+    translations: Object.fromEntries(
+      Object.entries(doc.translations ?? {}).map(([language, t]) => [
+        language,
+        {
+          body: {
+            contentParagraphs: t.contentParagraphs,
+            bulletPoints: t.bulletPoints,
+            // Ids belong to the original questions; a translation lines up with them by position.
+            discussionQuestions: t.discussionQuestions.map((q, i) => ({id: doc.discussionQuestions[i]?.id ?? String(i), ...q})),
+            warnings: t.warnings ?? [],
+            ...(t.promptQuestion ? {promptQuestion: t.promptQuestion} : {}),
+          },
+          model: t.model ?? null,
+        },
+      ]),
+    ),
     review: doc.reviewProgress ?? null,
     comments: doc.comments,
   };
@@ -192,6 +227,7 @@ function partsOf(doc: DocumentSummary): Parts {
 interface Snapshot {
   meta: string;
   summary: string;
+  translations: Record<string, string>;
   review: string;
   commentIds: Set<string>;
 }
@@ -207,7 +243,13 @@ function stable(value: unknown): string {
 
 const snapshotOf = (doc: DocumentSummary): Snapshot => {
   const p = partsOf(doc);
-  return {meta: stable(p.meta), summary: stable(p.summary), review: stable(p.review), commentIds: new Set(doc.comments.map((c) => c.id))};
+  return {
+    meta: stable(p.meta),
+    summary: stable(p.summary),
+    translations: Object.fromEntries(Object.entries(p.translations).map(([lang, t]) => [lang, stable(t)])),
+    review: stable(p.review),
+    commentIds: new Set(doc.comments.map((c) => c.id)),
+  };
 };
 
 function check<T>(res: {data?: T; error: {message: string} | null}, what: string): T {
@@ -243,6 +285,11 @@ export function createRepository(client: SupabaseClient, userId: string, author:
     );
   }
 
+  async function insertTranslations(docId: string, translations: Parts['translations']) {
+    const rows = Object.entries(translations).map(([language, t]) => ({document_id: docId, user_id: userId, language, model: t.model, body: t.body}));
+    if (rows.length) check(await client.from('summaries').insert(rows), 'save the translation');
+  }
+
   return {
     async list() {
       const {data, error} = await client
@@ -274,6 +321,7 @@ export function createRepository(client: SupabaseClient, userId: string, author:
           }),
           'save the summary',
         );
+        await insertTranslations(doc.id, parts.translations);
         if (parts.review) check(await client.from('review_progress').insert({document_id: doc.id, user_id: userId, progress: parts.review}), 'save review progress');
         await insertComments(doc.id, doc.comments);
       } catch (err) {
@@ -311,6 +359,16 @@ export function createRepository(client: SupabaseClient, userId: string, author:
             {onConflict: 'document_id,language'},
           ),
           'save your changes',
+        );
+      }
+      const changedTranslations = Object.entries(parts.translations).filter(([language]) => before?.translations[language] !== now.translations[language]);
+      if (changedTranslations.length) {
+        check(
+          await client.from('summaries').upsert(
+            changedTranslations.map(([language, t]) => ({document_id: doc.id, user_id: userId, language, model: t.model, body: t.body})),
+            {onConflict: 'document_id,language'},
+          ),
+          'save the translation',
         );
       }
       if (parts.review && (!before || before.review !== now.review)) {

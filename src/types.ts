@@ -84,6 +84,24 @@ export interface DocumentSummary {
   reviewProgress?: DocumentReviewProgress;
   /** Notes about this summary (e.g. figures that could not be found in the source). */
   summaryWarnings?: string[];
+  /**
+   * The summary in other languages, keyed by language name ("Swahili"). The document's own fields
+   * above are in `sourceMetadata.language` (English when unset); a translation has the same number
+   * of paragraphs, key points and questions in the same order, so review state carries across.
+   */
+  translations?: Record<string, TranslatedContent>;
+}
+
+/** The parts of a summary that are prose, in one language. */
+export interface TranslatedContent {
+  contentParagraphs: string[];
+  bulletPoints: {title: string; text: string}[];
+  discussionQuestions: {question: string; context: string}[];
+  promptQuestion?: string;
+  /** Model that produced it. */
+  model?: string;
+  /** Figures that could not be matched with the original, and similar. */
+  warnings?: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -232,4 +250,64 @@ export type SummarizeEvent =
 export interface GeneratedQuestion {
   question: string;
   context: string;
+}
+
+// ---------------------------------------------------------------------------
+// Translation (POST /api/translate)
+// ---------------------------------------------------------------------------
+
+export const TRANSLATION_LANGUAGES = ['English', 'Swahili'] as const;
+export type TranslationLanguage = (typeof TRANSLATION_LANGUAGES)[number];
+
+export interface TranslateRequest {
+  targetLanguage: TranslationLanguage;
+  /** The language the summary is written in now (helps the model; defaults to "the other one"). */
+  sourceLanguage?: TranslationLanguage;
+  contentParagraphs: string[];
+  bulletPoints: {title: string; text: string}[];
+  discussionQuestions: {question: string; context: string}[];
+  promptQuestion?: string;
+}
+
+export interface TranslateResponse extends TranslatedContent {
+  language: TranslationLanguage;
+  model: string;
+  warnings: string[];
+}
+
+// ---------------------------------------------------------------------------
+// Export (POST /api/export)
+// ---------------------------------------------------------------------------
+
+export const EXPORT_FORMATS = ['pdf', 'docx', 'txt', 'md'] as const;
+export type ExportFormat = (typeof EXPORT_FORMATS)[number];
+
+/** Everything a downloaded study summary contains; sent by the client so unsaved edits and translations export too. */
+export interface ExportDocument {
+  title: string;
+  category?: string;
+  tags?: string[];
+  /** Human-readable, e.g. "September 20, 2026 05:41 PM". */
+  createdDate?: string;
+  author?: string;
+  institution?: string;
+  /** Name of the file or URL that was summarised. */
+  sourceName?: string;
+  /** Language the summary below is written in. */
+  language?: string;
+  model?: string;
+  originalWordCount?: number;
+  summaryWordCount?: number;
+  reductionRate?: string;
+  contentParagraphs: string[];
+  bulletPoints: {title: string; text: string}[];
+  discussionQuestions: {question: string; context: string}[];
+  userNotes?: string;
+  /** Things the reader should double-check. */
+  warnings?: string[];
+}
+
+export interface ExportRequest {
+  format: ExportFormat;
+  document: ExportDocument;
 }

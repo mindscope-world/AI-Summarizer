@@ -12,6 +12,8 @@ export interface CallOptions {
   /** What we expect to generate; used to reserve rate-limit budget. */
   expectedOutput: number;
   signal?: AbortSignal;
+  /** What the call is for, used in error messages ("Translation failed: ..."). Defaults to "Summarization". */
+  task?: string;
   /** Called when the call has to wait for the token budget. */
   onWait?: (ms: number) => void;
 }
@@ -78,14 +80,14 @@ export function createLlmGateway(env: Env, budget = new RateBudget({tokensPerMin
     modelName: env.LLM_MODEL,
 
     async text(messages, opts) {
-      return run(messages, opts, 'Summarization', async (signal) => {
+      return run(messages, opts, opts.task ?? 'Summarization', async (signal) => {
         const response = await modelFor(opts.maxTokens).invoke(messages, {signal});
         return {value: textOf(response.content), usage: (response as UsageHolder).usage_metadata};
       });
     },
 
     async structured<T>(schema: z.ZodType<T>, name: string, messages: BaseMessageLike[], opts: CallOptions) {
-      return run(messages, opts, 'Summarization', async (signal) => {
+      return run(messages, opts, opts.task ?? 'Summarization', async (signal) => {
         const runnable = modelFor(opts.maxTokens).withStructuredOutput(schema as never, {name, method, includeRaw: true}) as unknown as {
           invoke(m: BaseMessageLike[], o?: {signal?: AbortSignal}): Promise<{raw: UsageHolder; parsed: T | null; parsing_error?: unknown}>;
         };

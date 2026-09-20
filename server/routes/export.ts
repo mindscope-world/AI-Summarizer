@@ -1,23 +1,35 @@
 import {Router} from 'express';
-import {z} from 'zod';
-import {notImplemented} from '../lib/errors';
+import {renderExport, exportBodySchema} from '../export';
+import {asyncHandler} from '../lib/asyncHandler';
+import type {Logger} from '../lib/logger';
 import {validate} from '../middleware/validate';
+import type {ExportRequest} from '../../src/types';
 
-export const documentIdParams = z.object({
-  id: z.string().trim().min(1).max(128),
-});
-
-export const exportQuery = z.object({
-  format: z.enum(['pdf', 'docx', 'txt', 'md']),
-});
-
-/** GET /api/documents/:id/export?format=: real PDF/DOCX/TXT/MD files (Phase 5). */
-export function createExportRouter(): Router {
+/**
+ * POST /api/export: a summary in, a real PDF / DOCX / TXT / MD file out. The client sends the
+ * summary (so unsaved edits and translations export exactly as shown); nothing is stored.
+ */
+export function createExportRouter({logger}: {logger: Logger}): Router {
   const router = Router();
 
-  router.get('/documents/:id/export', validate({params: documentIdParams, query: exportQuery}), (_req, _res, next) => {
-    next(notImplemented('Document export', 5));
-  });
+  router.post(
+    '/export',
+    validate({body: exportBodySchema}),
+    asyncHandler(async (req, res) => {
+      const {format, document} = req.body as ExportRequest;
+      const started = Date.now();
+      const file = await renderExport(format, document);
+
+      // Metadata only: never the summary text or title.
+      logger.info('export_completed', {requestId: req.id, userId: req.user?.id, format, bytes: file.body.length, durationMs: Date.now() - started});
+
+      res.setHeader('Content-Type', file.contentType);
+      res.setHeader('Content-Length', String(file.body.length));
+      res.setHeader('Content-Disposition', `attachment; filename="${file.fileName}"; filename*=UTF-8''${encodeURIComponent(file.fileName)}`);
+      if (file.warnings.length) res.setHeader('X-Export-Warning', encodeURIComponent(file.warnings.join(' ')));
+      res.send(file.body);
+    }),
+  );
 
   return router;
 }

@@ -125,11 +125,15 @@ describe('validation', () => {
     expect(paths).toEqual(expect.arrayContaining(['body.text', 'body.length', 'body.category']));
   });
 
-  it('validates query and params on export', async () => {
+  it('validates the export format and document', async () => {
     const {base} = await start();
-    const res = await fetch(`${base}/api/documents/doc-1/export?format=exe`);
+    const res = await fetch(`${base}/api/export`, {
+      method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify({format: 'exe', document: {title: '', contentParagraphs: [], bulletPoints: [], discussionQuestions: []}}),
+    });
     expect(res.status).toBe(400);
-    expect((await errorOf(res)).details?.[0].path).toBe('query.format');
+    expect((await errorOf(res)).details?.map((d) => d.path)).toEqual(expect.arrayContaining(['body.format', 'body.document.title']));
   });
 
   it('validates feedback', async () => {
@@ -443,14 +447,152 @@ describe('POST /api/summarize', () => {
   });
 });
 
+const EXPORT_DOC = {
+  title: 'Consensus Protocols',
+  category: 'Computer Science',
+  contentParagraphs: ['Nodes agree on one value even when some fail.'],
+  bulletPoints: [{title: 'Quorums', text: 'A majority vote keeps replicas consistent.'}],
+  discussionQuestions: [{question: 'Why a majority?', context: 'Partitions.'}],
+  userNotes: 'PRIVATE NOTE about my thesis',
+};
+const postExport = (base: string, format: string, document: unknown = EXPORT_DOC) =>
+  fetch(`${base}/api/export`, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({format, document})});
+
+describe('POST /api/export', () => {
+  it.each([
+    ['pdf', 'application/pdf', '%PDF-'],
+    ['docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'PK'],
+    ['txt', 'text/plain; charset=utf-8', 'Consensus Protocols'],
+    ['md', 'text/markdown; charset=utf-8', '# Consensus Protocols'],
+  ])('returns a real %s file as a download', async (format, type, start_) => {
+    const {base} = await start();
+    const res = await postExport(base, format);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe(type);
+    expect(res.headers.get('content-disposition')).toContain(`attachment; filename="consensus_protocols_summary.${format}"`);
+    expect(res.headers.get('x-content-type-options')).toBe('nosniff');
+    const body = Buffer.from(await res.arrayBuffer());
+    expect(body.subarray(0, start_.length).toString()).toBe(start_);
+    expect(Number(res.headers.get('content-length'))).toBe(body.length);
+  });
+
+  it('reports characters a PDF cannot show in a header', async () => {
+    const {base} = await start();
+    const res = await postExport(base, 'pdf', {...EXPORT_DOC, contentParagraphs: ['日本語']});
+    expect(res.status).toBe(200);
+    expect(decodeURIComponent(res.headers.get('x-export-warning') ?? '')).toMatch(/3 characters could not be shown/);
+  });
+
+  it('logs only metadata, never the summary or notes', async () => {
+    const {base, lines} = await start();
+    await postExport(base, 'txt');
+    await new Promise((r) => setTimeout(r, 20));
+    const all = lines.join('\n');
+    expect(all).toContain('export_completed');
+    expect(all).not.toContain('PRIVATE NOTE');
+    expect(all).not.toContain('Consensus Protocols');
+  });
+});
+
+describe('POST /api/translate', () => {
+  const ORIGINAL = {
+    contentParagraphs: ['Consensus protocols let nodes agree on one value. Raft handles 5 nodes and tolerates 2 failures.'],
+    bulletPoints: [{title: 'Quorums', text: 'A majority vote keeps replicas consistent.'}],
+    discussionQuestions: [{question: 'Why does a majority matter?', context: 'Think about partitions.'}],
+    promptQuestion: 'How do quorums help?',
+  };
+  const SW = {
+    paragraphs: ['Itifaki za makubaliano huruhusu nodi kukubaliana kuhusu thamani moja. Raft hushughulikia nodi 5 na huvumilia hitilafu 2.'],
+    keyPoints: [{title: 'Akidi', text: 'Kura ya walio wengi huweka nakala zikiwa sawa.'}],
+    discussionQuestions: [{question: 'Kwa nini wingi ni muhimu?', context: 'Fikiria kuhusu migawanyiko ya mtandao.'}],
+    promptQuestion: 'Akidi husaidiaje?',
+  };
+  const post = (base: string, body: unknown) =>
+    fetch(`${base}/api/translate`, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(body)});
+  const cfg = (fake: FakeGroq) => ({GROQ_BASE_URL: fake.url, LLM_MODEL: 'openai/gpt-oss-120b', LLM_MAX_RETRIES: '0'});
+
+  it('returns the summary in the target language, aligned with the original', async () => {
+    const fake = await startFakeGroq(() => JSON.stringify(SW));
+    fakeGroqs.push(fake);
+    const {base, lines} = await start(cfg(fake));
+    const res = await post(base, {...ORIGINAL, targetLanguage: 'Swahili', sourceLanguage: 'English'});
+    expect(res.status).toBe(200);
+    const out = await res.json();
+    expect(out).toMatchObject({language: 'Swahili', model: 'openai/gpt-oss-120b', warnings: []});
+    expect(out.contentParagraphs).toEqual(SW.paragraphs);
+    expect(out.bulletPoints).toEqual(SW.keyPoints);
+    expect(out.discussionQuestions).toEqual(SW.discussionQuestions);
+    expect(out.promptQuestion).toBe('Akidi husaidiaje?');
+
+    const prompt = JSON.stringify(fake.calls[0].body.messages);
+    expect(prompt).toContain('Kiswahili');
+    expect(prompt).toContain('untrusted data');
+    const log = lines.join('\n');
+    expect(log).toContain('translate_completed');
+    expect(log).not.toContain('Consensus protocols');
+  });
+
+  it('asks the model once more when the counts do not line up, then succeeds', async () => {
+    const fake = await startFakeGroq((_c, i) => JSON.stringify(i === 0 ? {...SW, keyPoints: []} : SW));
+    fakeGroqs.push(fake);
+    const {base} = await start(cfg(fake));
+    const res = await post(base, {...ORIGINAL, targetLanguage: 'Swahili'});
+    expect(res.status).toBe(200);
+    expect(fake.calls.length).toBe(2);
+    expect(JSON.stringify(fake.calls[1].body.messages)).toContain('exactly 1 key points (you returned 0)');
+  });
+
+  it('gives up with a clear error when the model keeps returning the wrong shape', async () => {
+    const fake = await startFakeGroq(() => JSON.stringify({...SW, paragraphs: []}));
+    fakeGroqs.push(fake);
+    const {base} = await start(cfg(fake));
+    const res = await post(base, {...ORIGINAL, targetLanguage: 'Swahili'});
+    expect(res.status).toBe(502);
+    const err = await errorOf(res);
+    expect(err.message).toMatch(/^Translation failed: /);
+    expect(fake.calls.length).toBe(2);
+  });
+
+  it('warns when a figure in the translation is not in the original', async () => {
+    const fake = await startFakeGroq(() => JSON.stringify({...SW, paragraphs: [SW.paragraphs[0].replace('nodi 5', 'nodi 500')]}));
+    fakeGroqs.push(fake);
+    const {base} = await start(cfg(fake));
+    const out = await (await post(base, {...ORIGINAL, targetLanguage: 'Swahili'})).json();
+    expect(out.warnings[0]).toMatch(/figures that are not in the original \(500\)/);
+  });
+
+  it('names the task in upstream errors and never leaks provider details', async () => {
+    const fake = await startFakeGroq(() => ({status: 401}));
+    fakeGroqs.push(fake);
+    const {base} = await start(cfg(fake));
+    const res = await post(base, {...ORIGINAL, targetLanguage: 'Swahili'});
+    expect(res.status).toBe(502);
+    const text = JSON.stringify(await res.json());
+    expect(text).toContain('Translation failed');
+    expect(text).not.toContain('sk-secret-body');
+  });
+
+  it('validates the request', async () => {
+    const {base} = await start();
+    const bad = await post(base, {...ORIGINAL, targetLanguage: 'French'});
+    expect(bad.status).toBe(400);
+    const same = await post(base, {...ORIGINAL, targetLanguage: 'English', sourceLanguage: 'English'});
+    expect((await errorOf(same)).details?.[0].path).toBe('body.targetLanguage');
+    const empty = await post(base, {targetLanguage: 'Swahili', contentParagraphs: [], bulletPoints: [], discussionQuestions: []});
+    expect(empty.status).toBe(400);
+    const huge = await post(base, {...ORIGINAL, targetLanguage: 'Swahili', contentParagraphs: Array(12).fill('x'.repeat(4_000))});
+    expect(huge.status).toBe(413);
+  });
+});
+
 describe('rate limiting', () => {
   it('returns 429 after the per-minute limit but never throttles /health', async () => {
     const {base} = await start({RATE_LIMIT_PER_MINUTE: '3'});
     const statuses: number[] = [];
-    for (let i = 0; i < 5; i++) statuses.push((await fetch(`${base}/api/documents/doc-1/export?format=pdf`)).status);
-    expect(statuses).toEqual([501, 501, 501, 429, 429]);
+    for (let i = 0; i < 5; i++) statuses.push((await postExport(base, 'md')).status);
+    expect(statuses).toEqual([200, 200, 200, 429, 429]);
 
-    const limited = await fetch(`${base}/api/documents/doc-1/export?format=pdf`);
+    const limited = await postExport(base, 'md');
     expect((await errorOf(limited)).code).toBe('rate_limited');
 
     for (let i = 0; i < 6; i++) expect((await fetch(`${base}/api/health`)).status).toBe(200);
