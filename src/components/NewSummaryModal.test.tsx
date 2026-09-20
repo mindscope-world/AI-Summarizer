@@ -3,15 +3,43 @@ import { StrictMode } from 'react';
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { DocumentSummary, ExtractionResult } from '../types';
+import type { DocumentSummary, ExtractionResult, SummaryResult } from '../types';
 import { NewSummaryModal } from './NewSummaryModal';
 import * as api from '../lib/api';
 
 vi.mock('../lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/api')>();
-  return { ...actual, extractDocument: vi.fn() };
+  return { ...actual, extractDocument: vi.fn(), summarizeDocument: vi.fn() };
 });
 const extractDocument = vi.mocked(api.extractDocument);
+const summarizeDocument = vi.mocked(api.summarizeDocument);
+
+const makeSummary = (over: Partial<SummaryResult> = {}): SummaryResult => ({
+  title: 'Consensus Protocols',
+  contentParagraphs: ['Nodes agree on one value using quorums.', 'Raft elects a leader to order the log.'],
+  bulletPoints: [
+    { title: 'Quorums.', text: 'A majority vote keeps replicas consistent.' },
+    { title: 'Leaders.', text: 'One leader orders all writes.' },
+  ],
+  discussionQuestions: [{ question: 'Why a majority?', context: 'Think about partitions.' }],
+  promptQuestion: 'How do quorums keep replicas consistent?',
+  emotionalTone: 'Analytical & Rigorous',
+  tags: ['Consensus', 'Raft'],
+  excerpt: 'Nodes agree on one value using quorums.',
+  metadata: {
+    model: 'qwen/qwen3.8-27b',
+    mode: 'abstractive',
+    length: 'balanced',
+    language: 'English',
+    originalWordCount: 1234,
+    summaryWordCount: 61,
+    reductionRate: '95%',
+    sections: 1,
+    processingSeconds: 3.2,
+  },
+  warnings: [],
+  ...over,
+});
 
 const makeResult = (over: Partial<ExtractionResult> = {}): ExtractionResult => ({
   text: 'Consensus protocols let nodes agree. Paxos and Raft use quorums.',
@@ -42,15 +70,6 @@ const setup = () => {
   return { user, onCreated, onClose, fileInput, startButton, findCard, ...utils };
 };
 
-/** Plays the (simulated) pipeline animation: each step needs a React render before the next timer is armed. */
-const finishPipeline = async () => {
-  for (let i = 0; i < 10; i++) {
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(500);
-    });
-  }
-};
-
 const pdf = (name = 'Lecture_Notes-4.pdf', size = 2048) => {
   const file = new File(['%PDF-1.4'], name, { type: 'application/pdf' });
   Object.defineProperty(file, 'size', { value: size });
@@ -60,6 +79,8 @@ const pdf = (name = 'Lecture_Notes-4.pdf', size = 2048) => {
 beforeEach(() => {
   vi.useFakeTimers({ shouldAdvanceTime: true });
   extractDocument.mockReset();
+  summarizeDocument.mockReset();
+  summarizeDocument.mockResolvedValue(makeSummary());
 });
 afterEach(() => {
   cleanup();
@@ -252,11 +273,19 @@ describe('NewSummaryModal: pasted text and creating the document', () => {
     expect(extractDocument).toHaveBeenCalledTimes(1);
     expect(extractDocument.mock.calls[0][0]).toEqual({ text: 'raw pasted text', stripReferences: false });
 
-    await finishPipeline();
-    expect(onCreated).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(onCreated).toHaveBeenCalledTimes(1));
+    // The model receives the cleaned text from the server, not the raw paste.
+    expect(summarizeDocument.mock.calls[0][0]).toMatchObject({
+      text: result.text,
+      category: 'Computer Science',
+      summarizationType: 'abstractive',
+      length: 'balanced',
+      language: 'English',
+      sourceLanguage: 'en',
+    });
     const doc = onCreated.mock.calls[0][0];
     expect(doc.sourceText).toBe(result.text);
-    expect(doc.sourceMetadata).toMatchObject({ originalWordCount: 9, fileType: 'NOTE', author: 'Demo Student' });
+    expect(doc.sourceMetadata).toMatchObject({ originalWordCount: 1234, fileType: 'NOTE', author: 'Demo Student' });
     expect(doc.title).toBe('Synthesized Academic Reflection');
     expect(onClose).toHaveBeenCalled();
   });
@@ -269,8 +298,8 @@ describe('NewSummaryModal: pasted text and creating the document', () => {
     await user.click(startButton());
 
     expect((await screen.findByRole('alert')).textContent).toMatch(/No readable text/);
-    expect(screen.queryByText(/Processing Academic Material/)).toBeNull();
-    await finishPipeline();
+    expect(screen.queryByText(/Summarizing Academic Material/)).toBeNull();
+    expect(summarizeDocument).not.toHaveBeenCalled();
     expect(onCreated).not.toHaveBeenCalled();
   });
 
@@ -280,7 +309,7 @@ describe('NewSummaryModal: pasted text and creating the document', () => {
     await user.upload(fileInput(), pdf());
     await screen.findByText('1,234');
     await user.click(startButton());
-    await finishPipeline();
+    await waitFor(() => expect(onCreated).toHaveBeenCalledTimes(1));
 
     expect(extractDocument).toHaveBeenCalledTimes(1);
     const doc = onCreated.mock.calls[0][0];
@@ -300,11 +329,11 @@ describe('NewSummaryModal: pasted text and creating the document', () => {
 
   it('resets the form after a successful creation', async () => {
     extractDocument.mockResolvedValue(makeResult());
-    const { user, fileInput, startButton } = setup();
+    const { user, fileInput, startButton, onCreated } = setup();
     await user.upload(fileInput(), pdf());
     await screen.findByText('1,234');
     await user.click(startButton());
-    await finishPipeline();
+    await waitFor(() => expect(onCreated).toHaveBeenCalledTimes(1));
     expect((screen.getByLabelText(/document title/i) as HTMLInputElement).value).toBe('');
     expect(screen.queryByText('1,234')).toBeNull();
   });
@@ -321,9 +350,87 @@ describe('NewSummaryModal: pasted text and creating the document', () => {
     await user.upload(container.querySelector<HTMLInputElement>('#document-file-input')!, pdf());
     await waitFor(() => expect(container.querySelector('#extraction-summary')).not.toBeNull());
     await user.click(screen.getByRole('button', { name: /start ai summarization/i }));
-    await finishPipeline();
-    await finishPipeline();
+    await waitFor(() => expect(onCreated).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
     expect(onCreated).toHaveBeenCalledTimes(1);
+    expect(summarizeDocument).toHaveBeenCalledTimes(1);
+  });
+
+  it('builds the document from what the model wrote, not from a template', async () => {
+    extractDocument.mockResolvedValue(makeResult());
+    summarizeDocument.mockResolvedValue(makeSummary({ warnings: ['Check these figures: 34%.'] }));
+    const { user, fileInput, onCreated, startButton } = setup();
+    await user.upload(fileInput(), pdf());
+    await screen.findByText('1,234');
+    await user.click(startButton());
+    await waitFor(() => expect(onCreated).toHaveBeenCalledTimes(1));
+
+    const doc = onCreated.mock.calls[0][0];
+    expect(doc.contentParagraphs).toEqual(['Nodes agree on one value using quorums.', 'Raft elects a leader to order the log.']);
+    expect(doc.bulletPoints.map((b) => b.title)).toEqual(['Quorums.', 'Leaders.']);
+    expect(doc.discussionQuestions).toMatchObject([{ question: 'Why a majority?', context: 'Think about partitions.' }]);
+    expect(doc.promptQuestion).toBe('How do quorums keep replicas consistent?');
+    expect(doc.tags).toEqual(['Consensus', 'Raft']);
+    expect(doc.summaryWarnings).toEqual(['Check these figures: 34%.']);
+    expect(doc.sourceMetadata).toMatchObject({ modelUsed: 'qwen/qwen3.8-27b', summaryWordCount: 61, reductionRate: '95%', processingTime: '3.2s' });
+    // Nothing invented: the old hard-coded quality claims are gone.
+    expect(doc.sourceMetadata?.rougeScores).toBeUndefined();
+    expect(JSON.stringify(doc)).not.toMatch(/BERT|ROUGE metrics/);
+  });
+
+  it('shows live progress from the summarizer while it works', async () => {
+    extractDocument.mockResolvedValue(makeResult());
+    let finish!: (s: SummaryResult) => void;
+    summarizeDocument.mockImplementation((_input, opts) => {
+      opts?.onProgress?.({ stage: 'sections', message: 'Reading section 2 of 4', percent: 40, current: 1, total: 4 });
+      return new Promise<SummaryResult>((resolve) => (finish = resolve));
+    });
+    const { user, fileInput, onCreated, startButton } = setup();
+    await user.upload(fileInput(), pdf());
+    await screen.findByText('1,234');
+    await user.click(startButton());
+
+    expect(await screen.findByText('Reading section 2 of 4')).toBeTruthy();
+    expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('40');
+    expect(onCreated).not.toHaveBeenCalled();
+    await act(async () => finish(makeSummary()));
+    await waitFor(() => expect(onCreated).toHaveBeenCalledTimes(1));
+  });
+
+  it('returns to the form with the server message if summarizing fails, and creates nothing', async () => {
+    extractDocument.mockResolvedValue(makeResult());
+    summarizeDocument.mockRejectedValue(new api.ApiError('Summarization failed: the AI service is busy.', 502, 'upstream_error'));
+    const { user, fileInput, onCreated, startButton } = setup();
+    await user.upload(fileInput(), pdf());
+    await screen.findByText('1,234');
+    await user.click(startButton());
+
+    expect((await screen.findByRole('alert')).textContent).toMatch(/AI service is busy/);
+    expect(screen.queryByRole('progressbar')).toBeNull();
+    expect(onCreated).not.toHaveBeenCalled();
+    // The extraction is kept, so the student can simply try again.
+    expect((startButton() as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('cancels an in-progress summarization and creates nothing', async () => {
+    extractDocument.mockResolvedValue(makeResult());
+    let signal: AbortSignal | undefined;
+    summarizeDocument.mockImplementation((_input, opts) => {
+      signal = opts?.signal;
+      return new Promise<SummaryResult>(() => undefined);
+    });
+    const { user, fileInput, onCreated, startButton } = setup();
+    await user.upload(fileInput(), pdf());
+    await screen.findByText('1,234');
+    await user.click(startButton());
+    await screen.findByRole('progressbar');
+
+    await user.click(screen.getByRole('button', { name: /^cancel$/i }));
+    expect(signal?.aborted).toBe(true);
+    expect(screen.queryByRole('progressbar')).toBeNull();
+    expect(onCreated).not.toHaveBeenCalled();
   });
 });
 

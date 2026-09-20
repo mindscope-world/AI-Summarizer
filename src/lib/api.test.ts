@@ -1,5 +1,16 @@
 import {afterEach, describe, expect, it, vi} from 'vitest';
-import {ApiError, apiRequest, describeApiError, extractDocument, getApiBase, getHealth, normalizeApiBase, setApiBase} from './api';
+import {
+  ApiError,
+  apiRequest,
+  describeApiError,
+  extractDocument,
+  getApiBase,
+  getHealth,
+  normalizeApiBase,
+  setApiBase,
+  summarizeDocument,
+} from './api';
+import type {SummaryResult} from './../types';
 
 function mockFetch(impl: (url: string, init: RequestInit) => Response | Promise<Response>) {
   const fn = vi.fn(async (url: string, init: RequestInit) => impl(url, init));
@@ -195,3 +206,77 @@ describe('describeApiError', () => {
   });
 });
 
+
+describe('summarizeDocument', () => {
+  const input = {text: 'Some notes.', category: 'CS', summarizationType: 'abstractive', length: 'balanced', language: 'English'} as const;
+  const result = {title: 'T', contentParagraphs: ['p'], warnings: []} as unknown as SummaryResult;
+  const frame = (event: unknown) => `data: ${JSON.stringify(event)}\n\n`;
+  /** An event-stream response whose body arrives in the given pieces (which may split frames anywhere). */
+  const sse = (...pieces: string[]) =>
+    new Response(
+      new ReadableStream({
+        start(controller) {
+          for (const piece of pieces) controller.enqueue(new TextEncoder().encode(piece));
+          controller.close();
+        },
+      }),
+      {headers: {'content-type': 'text/event-stream'}},
+    );
+
+  it('asks for an event stream and returns the result, reporting progress along the way', async () => {
+    const fetchMock = mockFetch(() =>
+      sse(
+        frame({type: 'progress', stage: 'prepare', message: 'Preparing', percent: 2}),
+        frame({type: 'progress', stage: 'sections', message: 'Reading section 1 of 2', percent: 30}),
+        frame({type: 'result', result}),
+      ),
+    );
+    const seen: number[] = [];
+    const out = await summarizeDocument(input, {onProgress: (p) => seen.push(p.percent)});
+    expect(out).toEqual(result);
+    expect(seen).toEqual([2, 30]);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('/api/summarize');
+    expect((init.headers as Record<string, string>).Accept).toBe('text/event-stream');
+    expect(JSON.parse(init.body as string)).toEqual(input);
+  });
+
+  it('reassembles events split across network chunks', async () => {
+    const whole = frame({type: 'progress', stage: 'prepare', message: 'Preparing', percent: 5}) + frame({type: 'result', result});
+    const cut = 17;
+    mockFetch(() => sse(whole.slice(0, cut), whole.slice(cut, cut + 40), whole.slice(cut + 40)));
+    const seen: number[] = [];
+    expect(await summarizeDocument(input, {onProgress: (p) => seen.push(p.percent)})).toEqual(result);
+    expect(seen).toEqual([5]);
+  });
+
+  it('throws the server message when the stream ends with an error event', async () => {
+    mockFetch(() => sse(frame({type: 'error', error: {code: 'upstream_error', message: 'Summarization failed: busy.', requestId: 'r1'}})));
+    await expect(summarizeDocument(input)).rejects.toMatchObject({message: 'Summarization failed: busy.', code: 'upstream_error'});
+  });
+
+  it('throws the JSON error for failures before the stream starts (validation, rate limit)', async () => {
+    mockFetch(() => json({error: {code: 'rate_limited', message: 'Too many requests.', requestId: 'r2'}}, {status: 429}));
+    const err = await summarizeDocument(input).catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err).toMatchObject({status: 429, code: 'rate_limited'});
+  });
+
+  it('fails clearly when the stream ends without a result', async () => {
+    mockFetch(() => sse(frame({type: 'progress', stage: 'prepare', message: 'Preparing', percent: 2})));
+    await expect(summarizeDocument(input)).rejects.toMatchObject({code: 'invalid_response'});
+  });
+
+  it('maps an unreachable server to a network_error, and a caller abort to AbortError', async () => {
+    mockFetch(() => {
+      throw new TypeError('fetch failed');
+    });
+    await expect(summarizeDocument(input)).rejects.toMatchObject({code: 'network_error'});
+
+    const controller = new AbortController();
+    mockFetch((_url, init) => new Promise<Response>((_res, rej) => init.signal!.addEventListener('abort', () => rej(new DOMException('x', 'AbortError')))));
+    const pending = summarizeDocument(input, {signal: controller.signal});
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({name: 'AbortError'});
+  });
+});

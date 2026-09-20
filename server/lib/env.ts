@@ -12,8 +12,11 @@ const envSchema = z.object({
     .refine((v) => !PLACEHOLDER_KEYS.has(v), 'GROQ_API_KEY is still the placeholder value'),
   /** Override to point LangChain at a proxy or a compatible server. Defaults to Groq's public API. */
   GROQ_BASE_URL: z.url().optional(),
-  /** Open-weights chat model used for summarization (via LangChain). */
-  LLM_MODEL: z.string().trim().min(1).default('qwen/qwen3.8-27b'),
+  /**
+   * Open-weights chat model used for summarization (via LangChain). Keep a gpt-oss model here: Groq caps
+   * Qwen at 1,000 output tokens/min, which is less than one summarization call asks for.
+   */
+  LLM_MODEL: z.string().trim().min(1).default('openai/gpt-oss-120b'),
   /** Reasoning effort for gpt-oss models. "low" keeps latency and token use down. */
   LLM_REASONING_EFFORT: z.enum(['low', 'medium', 'high']).default('low'),
   /** Tokens per minute (input + output) we allow ourselves on the text model. Groq's free tier is 8000. */

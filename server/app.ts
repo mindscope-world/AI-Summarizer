@@ -13,6 +13,7 @@ import {createExportRouter} from './routes/export';
 import {createExtractRouter} from './routes/extract';
 import {createFeedbackRouter} from './routes/feedback';
 import {createHealthRouter} from './routes/health';
+import {createLlmGateway} from './ai/gateway';
 import {createChatModel} from './ai/model';
 import {createLlmOcr} from './pipeline/ocr';
 import type {IngestDeps} from './pipeline/ingest';
@@ -75,7 +76,7 @@ export function createApp({env, logger, staticDir, ingestion}: AppOptions): Expr
 
   api.use(createHealthRouter(env));
   api.use(createExtractRouter({env, logger, ingestion: ingestDeps}));
-  api.use(createSummarizeRouter());
+  api.use(createSummarizeRouter({env, logger, llm: createLlmGateway(env)}));
   api.use(createExportRouter());
   api.use(createDocumentsRouter());
   api.use(createFeedbackRouter());

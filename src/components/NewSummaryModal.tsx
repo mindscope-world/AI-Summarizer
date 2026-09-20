@@ -13,10 +13,10 @@ import {
   AlertCircle,
   Trash2,
 } from 'lucide-react';
-import { DocumentSummary, ExtractionResult, SourceMetadata } from '../types';
+import { DocumentSummary, ExtractionResult, SourceMetadata, SummarizeProgress, SummaryResult } from '../types';
 import { cn } from '../lib/utils';
 import { useAuthUser } from '../lib/useAuthUser';
-import { ACCEPTED_EXTENSIONS, MAX_UPLOAD_MB, describeApiError, extractDocument, type ExtractInput } from '../lib/api';
+import { ACCEPTED_EXTENSIONS, MAX_UPLOAD_MB, describeApiError, extractDocument, summarizeDocument, type ExtractInput } from '../lib/api';
 
 interface NewSummaryModalProps {
   isOpen: boolean;
@@ -180,25 +180,20 @@ export const NewSummaryModal: React.FC<NewSummaryModalProps> = ({
   const [mode, setMode] = useState<'abstractive' | 'extractive'>('abstractive');
   const [summaryLength, setSummaryLength] = useState<'concise' | 'balanced' | 'detailed'>('balanced');
   const [language, setLanguage] = useState<'English' | 'Swahili'>('English');
-  const [model, setModel] = useState<'BERT-Academic' | 'T5-EastAfrica'>('BERT-Academic');
 
-  // Multi-step processing state (the AI stages are still simulated until Phase 3)
+  // Real summarization (server: /api/summarize, streamed progress)
   const [isProcessing, setIsProcessing] = useState(false);
-  const [currentStepIndex, setCurrentStepIndex] = useState(0);
-  /** What to build once the (simulated) pipeline animation finishes. */
-  const pendingRef = useRef<{ title: string; extracted: ExtractionResult } | null>(null);
-
-  const pipelineSteps = [
-    { label: 'Document Text Extraction (OCR / Parser)', sub: 'Extracting clean text tokens from source file...' },
-    { label: 'Text Cleaning & Normalization', sub: 'Removing noise, header artifacts, and formatting errors...' },
-    { label: 'Language Detection & Segmentation', sub: 'Detecting language and splitting into sentences...' },
-    { label: 'BERT Semantic Embedding & Attention', sub: 'Encoding hierarchical document structure with BERT-Large...' },
-    { label: 'Abstractive Summary Generation', sub: 'Synthesizing core arguments and discussion prompts...' },
-    { label: 'Formatting Structured Output', sub: 'Finalizing metadata, emotional tone, and bullet layout...' },
-  ];
+  const [progress, setProgress] = useState<SummarizeProgress | null>(null);
+  const summarizeAbortRef = useRef<AbortController | null>(null);
 
   // Cancel any in-flight request if the modal unmounts.
-  useEffect(() => () => abortRef.current?.abort(), []);
+  useEffect(
+    () => () => {
+      abortRef.current?.abort();
+      summarizeAbortRef.current?.abort();
+    },
+    [],
+  );
 
   // Sample presets for quick testing
   const samplePresets = [
@@ -323,18 +318,42 @@ export const NewSummaryModal: React.FC<NewSummaryModalProps> = ({
     }
     if (!result) return; // the error (if any) is already shown on the form
 
-    // The effect below animates the steps, then calls finishCreation with this.
-    pendingRef.current = {
-      title: title.trim() || suggestTitle(result) || 'Synthesized Academic Reflection',
-      extracted: result,
-    };
-    setCurrentStepIndex(0);
+    const finalTitle = title.trim() || suggestTitle(result) || 'Synthesized Academic Reflection';
+    summarizeAbortRef.current?.abort();
+    const controller = new AbortController();
+    summarizeAbortRef.current = controller;
+    setInputError(null);
+    setProgress({ stage: 'prepare', message: 'Sending the document to the summarizer', percent: 1 });
     setIsProcessing(true);
+    try {
+      const summary = await summarizeDocument(
+        {
+          text: result.text,
+          title: finalTitle,
+          category,
+          summarizationType: mode,
+          length: summaryLength,
+          language,
+          sourceLanguage: result.language.code,
+        },
+        { signal: controller.signal, onProgress: setProgress },
+      );
+      if (controller.signal.aborted) return;
+      setIsProcessing(false);
+      finishCreation(finalTitle, result, summary);
+    } catch (err) {
+      if (controller.signal.aborted || (err instanceof DOMException && err.name === 'AbortError')) return;
+      setIsProcessing(false);
+      setInputError(describeApiError(err));
+    }
   };
 
-  const finishCreation = (finalTitle: string, extracted: ExtractionResult) => {
+  const handleCancelProcessing = () => {
+    summarizeAbortRef.current?.abort();
     setIsProcessing(false);
+  };
 
+  const finishCreation = (finalTitle: string, extracted: ExtractionResult, summary: SummaryResult) => {
     // Choose category color
     let catColor: DocumentSummary['categoryColor'] = 'peach';
     if (category === 'Computer Science') catColor = 'blue';
@@ -347,74 +366,49 @@ export const NewSummaryModal: React.FC<NewSummaryModalProps> = ({
       extracted.source.url ??
       sampleFileName ??
       `${finalTitle.toLowerCase().replace(/\s+/g, '_')}.txt`;
+    const stamp = Date.now();
 
     const newDoc: DocumentSummary = {
-      id: `doc-${Date.now()}`,
+      id: `doc-${stamp}`,
       title: finalTitle,
       dateBadge: 'Today',
       timeAgoGroup: 'Last 7 days',
       category: category,
       categoryColor: catColor,
       extraCount: 1,
-      tags: [category, language === 'Swahili' ? 'Swahili Summary' : 'Academic BERT', mode === 'abstractive' ? 'Abstractive' : 'Extractive'],
-      excerpt: `${sourceText.slice(0, 110).replace(/\s+/g, ' ')}...`,
+      tags: summary.tags.length ? summary.tags : [category],
+      excerpt: summary.excerpt,
       createdDate: new Date().toLocaleDateString('en-US', {
         month: 'long',
         day: '2-digit',
         year: 'numeric',
       }) + ' ' + new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
       lastEditedDate: 'Today',
-      emotionalTone: mode === 'abstractive' ? 'Analytical & Rigorous' : 'Focused',
-      promptQuestion: `How do the core findings of ${finalTitle} apply to your coursework preparation?`,
-      contentParagraphs: [
-        `Summary synthesized by ${model} on ${new Date().toLocaleDateString('en-US')}. Analysis indicates key theoretical insights from the ingested material:`,
-      ],
-      bulletPoints: [
-        {
-          title: 'Primary Thesis & Core Argument.',
-          text: sourceText.slice(0, 220).replace(/\s+/g, ' ') + '...',
-        },
-        {
-          title: 'Methodology & Key Discoveries.',
-          text: 'Evaluated against standard ROUGE metrics with verified factual consistency, eliminating irrelevant digressions while preserving technical terminology.',
-        },
-        {
-          title: 'Actionable Implications.',
-          text: 'Enables focused revision sessions, accelerated assignment preparation, and integrated discussion question synthesis.',
-        },
-      ],
-      discussionQuestions: [
-        {
-          id: `dq-new-1`,
-          question: `What is the most critical distinction presented in this analysis?`,
-          context: 'Focus on methodological rigor and practical applications.',
-        },
-        {
-          id: `dq-new-2`,
-          question: `How might you test or dispute the conclusions drawn in this document?`,
-          context: 'Critical evaluation strengthens academic mastery.',
-        },
-      ],
+      emotionalTone: summary.emotionalTone,
+      promptQuestion: summary.promptQuestion,
+      contentParagraphs: summary.contentParagraphs,
+      bulletPoints: summary.bulletPoints,
+      discussionQuestions: summary.discussionQuestions.map((q, i) => ({
+        id: `dq-${stamp}-${i + 1}`,
+        question: q.question,
+        context: q.context,
+      })),
       currentDiscussionIndex: 0,
       userNotes: '',
       comments: [],
       sourceText,
+      summaryWarnings: summary.warnings.length ? summary.warnings : undefined,
       sourceMetadata: {
         fileName,
         fileType: FILE_TYPE_BY_FORMAT[extracted.source.format],
         author: extracted.source.author ?? authUser?.fullName,
         institution: authUser?.institution ?? 'The East Africa University',
-        originalWordCount: extracted.wordCount,
-        summaryWordCount: 380,
-        reductionRate: '86%',
-        modelUsed: model,
-        processingTime: '1.4s',
-        language: language,
-        rougeScores: {
-          rouge1: 0.91,
-          rouge2: 0.77,
-          rougeL: 0.87,
-        },
+        originalWordCount: summary.metadata.originalWordCount,
+        summaryWordCount: summary.metadata.summaryWordCount,
+        reductionRate: summary.metadata.reductionRate,
+        modelUsed: summary.metadata.model,
+        processingTime: `${summary.metadata.processingSeconds}s`,
+        language: summary.metadata.language,
       },
     };
 
@@ -422,27 +416,6 @@ export const NewSummaryModal: React.FC<NewSummaryModalProps> = ({
     resetForm();
     onClose();
   };
-
-  // Steps advance on a timer owned by this effect (not by a state updater), so React re-running
-  // updaters or effects (StrictMode) can never create the document twice.
-  useEffect(() => {
-    if (!isProcessing || !pendingRef.current) return;
-    const lastStep = pipelineSteps.length - 1;
-    const timer = setTimeout(
-      () => {
-        if (currentStepIndex < lastStep) {
-          setCurrentStepIndex(currentStepIndex + 1);
-          return;
-        }
-        const pending = pendingRef.current;
-        pendingRef.current = null;
-        if (pending) finishCreation(pending.title, pending.extracted);
-      },
-      currentStepIndex < lastStep ? 450 : 400,
-    );
-    return () => clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isProcessing, currentStepIndex]);
 
   if (!isOpen) return null;
 
@@ -475,7 +448,7 @@ export const NewSummaryModal: React.FC<NewSummaryModalProps> = ({
             <div>
               <h3 className="font-bold text-slate-900 text-sm">New Academic Reflection & Summarization</h3>
               <p className="text-[11px] text-slate-500">
-                East Africa University • BERT/T5 6-Stage Processing Pipeline
+                East Africa University • AI Summarization
               </p>
             </div>
           </div>
@@ -493,62 +466,44 @@ export const NewSummaryModal: React.FC<NewSummaryModalProps> = ({
         <div className="p-6 overflow-y-auto space-y-5 text-xs flex-1">
 
           {isProcessing ? (
-            /* Multi-step progress visualizer */
+            /* Live progress from the summarizer */
             <div className="py-6 px-4 space-y-6 text-center">
               <div className="w-14 h-14 mx-auto rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center animate-bounce">
                 <Cpu className="w-7 h-7" />
               </div>
               <div>
                 <h4 className="font-bold text-base text-slate-900 mb-1">
-                  Processing Academic Material
+                  Summarizing Academic Material
                 </h4>
-                <p className="text-xs text-slate-500">
-                  Executing automated summarization pipeline per project specification
+                <p role="status" aria-live="polite" className="text-xs text-slate-500">
+                  {progress?.message ?? 'Starting...'}
                 </p>
               </div>
 
               {/* Progress bar */}
-              <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
+              <div
+                role="progressbar"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={progress?.percent ?? 0}
+                className="w-full bg-slate-100 rounded-full h-2 overflow-hidden"
+              >
                 <div
                   className="bg-emerald-500 h-full transition-all duration-300 rounded-full"
-                  style={{ width: `${((currentStepIndex + 1) / pipelineSteps.length) * 100}%` }}
+                  style={{ width: `${progress?.percent ?? 0}%` }}
                 />
               </div>
 
-              {/* Stepper list */}
-              <div className="space-y-2.5 text-left max-w-md mx-auto">
-                {pipelineSteps.map((step, idx) => {
-                  const isDone = idx < currentStepIndex;
-                  const isCurrent = idx === currentStepIndex;
-                  return (
-                    <div
-                      key={idx}
-                      className={cn(
-                        "p-2.5 rounded-xl border flex items-center gap-3 transition-all",
-                        isCurrent
-                          ? "bg-emerald-50/80 border-emerald-300 text-emerald-950 font-semibold"
-                          : isDone
-                          ? "bg-slate-50/60 border-slate-200 text-slate-600"
-                          : "opacity-40 border-transparent text-slate-400"
-                      )}
-                    >
-                      <div className="w-5 h-5 rounded-full flex items-center justify-center shrink-0">
-                        {isDone ? (
-                          <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                        ) : isCurrent ? (
-                          <RotateCw className="w-4 h-4 text-emerald-600 animate-spin" />
-                        ) : (
-                          <span className="w-2 h-2 rounded-full bg-slate-300" />
-                        )}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-xs truncate">{step.label}</p>
-                        {isCurrent && <p className="text-[10px] text-emerald-700 font-normal">{step.sub}</p>}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
+              <p className="text-[11px] text-slate-400">
+                Long documents can take a few minutes because of the AI service's free-tier limits.
+              </p>
+              <button
+                type="button"
+                onClick={handleCancelProcessing}
+                className="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-800 rounded-xl hover:bg-slate-100"
+              >
+                Cancel
+              </button>
             </div>
           ) : (
             <>
@@ -798,9 +753,9 @@ export const NewSummaryModal: React.FC<NewSummaryModalProps> = ({
               {/* AI Processing Settings */}
               <div className="pt-2 border-t border-slate-100">
                 <label className="font-semibold text-slate-700 block mb-2">
-                  2. AI Model & Summarization Parameters
+                  2. Summarization Options
                 </label>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
 
                   {/* Mode */}
                   <div>
@@ -810,7 +765,7 @@ export const NewSummaryModal: React.FC<NewSummaryModalProps> = ({
                       onChange={(e) => setMode(e.target.value as any)}
                       className="w-full p-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs"
                     >
-                      <option value="abstractive">Abstractive (BERT)</option>
+                      <option value="abstractive">Abstractive (AI-written)</option>
                       <option value="extractive">Extractive (Ranked)</option>
                     </select>
                   </div>
@@ -839,19 +794,6 @@ export const NewSummaryModal: React.FC<NewSummaryModalProps> = ({
                     >
                       <option value="English">English</option>
                       <option value="Swahili">Swahili (Kiswahili)</option>
-                    </select>
-                  </div>
-
-                  {/* Model */}
-                  <div>
-                    <span className="text-[10px] text-slate-400 uppercase font-bold block mb-1">Engine</span>
-                    <select
-                      value={model}
-                      onChange={(e) => setModel(e.target.value as any)}
-                      className="w-full p-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs"
-                    >
-                      <option value="BERT-Academic">BERT-Academic v2.4</option>
-                      <option value="T5-EastAfrica">T5-EastAfrica</option>
                     </select>
                   </div>
 

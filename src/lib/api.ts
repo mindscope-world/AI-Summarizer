@@ -1,4 +1,17 @@
-import type {ApiErrorBody, ApiErrorCode, ApiErrorDetail, ExtractionResult, HealthResponse} from '../types';
+import type {
+  ApiErrorBody,
+  ApiErrorCode,
+  ApiErrorDetail,
+  DetectedLanguage,
+  ExtractionResult,
+  HealthResponse,
+  SummarizeEvent,
+  SummarizeProgress,
+  SummaryLanguage,
+  SummaryLength,
+  SummaryMode,
+  SummaryResult,
+} from '../types';
 
 export const DEFAULT_API_BASE = '/api';
 const STORAGE_KEY = 'leaderforge_api_base';
@@ -162,6 +175,124 @@ export function extractDocument(
     ...opts,
     body: {url: input.url, text: input.text, stripReferences: input.stripReferences},
   });
+}
+
+export interface SummarizeInput {
+  text: string;
+  title?: string;
+  category: string;
+  courseCode?: string;
+  summarizationType: SummaryMode;
+  length: SummaryLength;
+  language: SummaryLanguage;
+  /** Language code reported by /api/extract. */
+  sourceLanguage?: DetectedLanguage['code'];
+}
+
+/** A long document on a free-tier rate limit can take several minutes; progress events keep the user informed. */
+const SUMMARIZE_TIMEOUT_MS = 10 * 60_000;
+
+/**
+ * Summarizes text on the server, reporting progress as it goes. The server streams
+ * Server-Sent Events: zero or more `progress` events, then one `result` or `error`.
+ */
+export async function summarizeDocument(
+  input: SummarizeInput,
+  options: {signal?: AbortSignal; onProgress?: (p: SummarizeProgress) => void; timeoutMs?: number; baseUrl?: string} = {},
+): Promise<SummaryResult> {
+  const {signal, onProgress, timeoutMs = SUMMARIZE_TIMEOUT_MS, baseUrl} = options;
+  const base = baseUrl ? (normalizeApiBase(baseUrl) ?? DEFAULT_API_BASE) : getApiBase();
+
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  const onCallerAbort = () => controller.abort();
+  signal?.addEventListener('abort', onCallerAbort, {once: true});
+
+  try {
+    let res: Response;
+    try {
+      res = await fetch(`${base}/summarize`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json', Accept: 'text/event-stream'},
+        body: JSON.stringify(input),
+        signal: controller.signal,
+      });
+    } catch {
+      if (timedOut) throw new ApiError('The request timed out.', 0, 'timeout');
+      if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+      throw new ApiError('Could not reach the server. Is it running?', 0, 'network_error');
+    }
+
+    const requestId = res.headers.get('x-request-id') ?? undefined;
+    if (!res.ok || !res.body) {
+      // Failures before the stream starts (validation, rate limit) are ordinary JSON errors.
+      let apiError: Partial<ApiErrorBody['error']> | undefined;
+      try {
+        apiError = ((await res.json()) as Partial<ApiErrorBody>).error;
+      } catch {
+        apiError = undefined;
+      }
+      if (apiError?.code && apiError.message) {
+        throw new ApiError(apiError.message, res.status, apiError.code, apiError.requestId ?? requestId, apiError.details);
+      }
+      throw new ApiError(`Server responded with HTTP ${res.status}.`, res.status, 'http_error', requestId);
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let result: SummaryResult | undefined;
+
+    const handle = (frame: string) => {
+      const data = frame
+        .split('\n')
+        .filter((line) => line.startsWith('data:'))
+        .map((line) => line.slice(5).trimStart())
+        .join('\n');
+      if (!data) return;
+      let event: SummarizeEvent;
+      try {
+        event = JSON.parse(data) as SummarizeEvent;
+      } catch {
+        return;
+      }
+      if (event.type === 'progress') onProgress?.(event);
+      else if (event.type === 'result') result = event.result;
+      else if (event.type === 'error') {
+        throw new ApiError(event.error.message, res.status, event.error.code, event.error.requestId ?? requestId, event.error.details);
+      }
+    };
+
+    try {
+      for (;;) {
+        const {done, value} = await reader.read();
+        buffer += decoder.decode(value, {stream: !done});
+        let split: number;
+        while ((split = buffer.search(/\r?\n\r?\n/)) >= 0) {
+          const match = buffer.slice(split).match(/^\r?\n\r?\n/)!;
+          handle(buffer.slice(0, split));
+          buffer = buffer.slice(split + match[0].length);
+        }
+        if (done) break;
+      }
+      if (buffer.trim()) handle(buffer);
+    } catch (err) {
+      if (err instanceof ApiError) throw err;
+      if (timedOut) throw new ApiError('The request timed out.', 0, 'timeout');
+      if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+      throw new ApiError('The connection to the server was interrupted.', 0, 'network_error');
+    }
+
+    if (!result) throw new ApiError('The server ended the response without a summary.', res.status, 'invalid_response', requestId);
+    return result;
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', onCallerAbort);
+  }
 }
 
 /** Turns any error from the API into a sentence a student can act on. */

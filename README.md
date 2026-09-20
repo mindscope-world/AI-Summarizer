@@ -49,7 +49,7 @@ All variables are read by the server only (`server/lib/env.ts`) and validated at
 | Variable | Default | Purpose |
 |---|---|---|
 | `GROQ_API_KEY` | required | Groq API key |
-| `LLM_MODEL` | `qwen/qwen3.8-27b` | Open-weights chat model for summarization |
+| `LLM_MODEL` | `openai/gpt-oss-120b` | Open-weights chat model for summarization (Qwen's 1,000 output-tokens/min free limit is too small for it) |
 | `OCR_MODEL` | `qwen/qwen3.8-27b` | Vision-capable open-weights model that reads scanned PDFs |
 | `OCR_MAX_PAGES` | `20` | Refuse scanned PDFs with more pages (one API call per page) |
 | `LLM_TIMEOUT_MS` | `60000` | Per-request timeout to the model |

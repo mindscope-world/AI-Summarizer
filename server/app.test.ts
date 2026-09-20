@@ -1,7 +1,7 @@
 import type {Server} from 'node:http';
 import type {AddressInfo} from 'node:net';
 import {afterEach, describe, expect, it} from 'vitest';
-import type {ApiErrorBody, ExtractionResult, HealthResponse} from '../src/types';
+import type {ApiErrorBody, ExtractionResult, HealthResponse, SummarizeEvent, SummaryResult} from '../src/types';
 import {createApp} from './app';
 import {loadEnv} from './lib/env';
 import {createLogger} from './lib/logger';
@@ -51,7 +51,7 @@ describe('GET /api/health', () => {
     const body = (await res.json()) as HealthResponse;
     expect(body).toMatchObject({status: 'ok', service: 'leaderforge-academic-summarizer', environment: 'test'});
     expect(typeof body.uptimeSeconds).toBe('number');
-    expect(body.ai).toEqual({provider: 'groq', model: 'qwen/qwen3.8-27b', ocrModel: 'qwen/qwen3.8-27b'});
+    expect(body.ai).toEqual({provider: 'groq', model: 'openai/gpt-oss-120b', ocrModel: 'qwen/qwen3.8-27b'});
     expect(JSON.stringify(body)).not.toContain(SECRET);
     expect(res.headers.get('cache-control')).toBe('no-store');
     expect(res.headers.get('x-content-type-options')).toBe('nosniff');
@@ -129,19 +129,6 @@ describe('validation', () => {
     const res = await fetch(`${base}/api/documents/doc-1/export?format=exe`);
     expect(res.status).toBe(400);
     expect((await errorOf(res)).details?.[0].path).toBe('query.format');
-  });
-
-  it('accepts a valid request and reports the feature as not implemented', async () => {
-    const {base} = await start();
-    const res = await fetch(`${base}/api/summarize`, {
-      method: 'POST',
-      headers: {'content-type': 'application/json'},
-      body: JSON.stringify({text: 'Some lecture notes.', category: 'Computer Science'}),
-    });
-    expect(res.status).toBe(501);
-    const err = await errorOf(res);
-    expect(err.code).toBe('not_implemented');
-    expect(err.message).toMatch(/Phase 3/);
   });
 
   it('validates feedback', async () => {
@@ -320,6 +307,138 @@ describe('POST /api/extract', () => {
     expect(all).toContain('extract_completed');
     expect(all).not.toContain('PRIVATE COURSEWORK');
     expect(all).not.toContain('confidential-thesis-draft');
+  });
+});
+
+describe('POST /api/summarize', () => {
+  const NOTES =
+    'Consensus protocols let independent nodes agree on one value even when some of them fail. ' +
+    'Paxos and Raft achieve this with quorum voting and leader election. ' +
+    'A log replicated across a majority of nodes survives the loss of a minority.';
+  const MODEL_REPLY = JSON.stringify({
+    title: 'Consensus Protocols',
+    paragraphs: ['Consensus protocols let nodes agree even when some fail, using quorum voting.'],
+    keyPoints: [
+      {title: 'Quorums', text: 'A majority vote keeps the system consistent.'},
+      {title: 'Leader election', text: 'Raft elects one leader to order the log.'},
+      {title: 'Fault tolerance', text: 'A minority of nodes can fail safely.'},
+    ],
+    discussionQuestions: [{question: 'Why does a majority quorum matter?', context: 'Think about partitions.'}],
+    promptQuestion: 'How do quorums keep replicas consistent?',
+    tone: 'Analytical & Rigorous',
+    tags: ['Consensus', 'Paxos'],
+  });
+  const post = (base: string, body: unknown, accept?: string) =>
+    fetch(`${base}/api/summarize`, {
+      method: 'POST',
+      headers: {'content-type': 'application/json', ...(accept ? {accept} : {})},
+      body: JSON.stringify(body),
+    });
+  // gpt-oss models take native JSON-schema output, which the fake server can answer with plain content.
+  const cfg = (fake: FakeGroq) => ({GROQ_BASE_URL: fake.url, LLM_MODEL: 'openai/gpt-oss-120b', LLM_MAX_RETRIES: '0'});
+
+  it('returns a real, structured summary written by the model', async () => {
+    const fake = await startFakeGroq(() => MODEL_REPLY);
+    fakeGroqs.push(fake);
+    const {base} = await start(cfg(fake));
+
+    const res = await post(base, {text: NOTES, category: 'Computer Science', title: 'Distributed Systems'});
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as SummaryResult;
+    expect(body.title).toBe('Distributed Systems');
+    expect(body.contentParagraphs[0]).toMatch(/quorum voting/);
+    expect(body.bulletPoints.map((b) => b.title)).toEqual(['Quorums.', 'Leader election.', 'Fault tolerance.']);
+    expect(body.discussionQuestions).toHaveLength(1);
+    expect(body.metadata).toMatchObject({model: 'openai/gpt-oss-120b', mode: 'abstractive', length: 'balanced', sections: 1});
+    // The document itself reached the model, along with the key.
+    expect(fake.calls).toHaveLength(1);
+    expect(JSON.stringify(fake.calls[0].body.messages)).toContain('Paxos and Raft');
+    expect(fake.calls[0].authorization).toBe(`Bearer ${SECRET}`);
+  });
+
+  it('streams progress and then the result when the client asks for text/event-stream', async () => {
+    const fake = await startFakeGroq(() => MODEL_REPLY);
+    fakeGroqs.push(fake);
+    const {base} = await start(cfg(fake));
+
+    const res = await post(base, {text: NOTES, category: 'Computer Science'}, 'text/event-stream');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toMatch(/text\/event-stream/);
+    const events = (await res.text())
+      .split('\n\n')
+      .filter(Boolean)
+      .map((f) => JSON.parse(f.replace(/^data: /, '')) as SummarizeEvent);
+    expect(events.at(-1)?.type).toBe('result');
+    const progress = events.filter((e) => e.type === 'progress');
+    expect(progress.length).toBeGreaterThan(0);
+    const percents = progress.map((e) => (e as {percent: number}).percent);
+    expect(percents).toEqual([...percents].sort((a, b) => a - b));
+  });
+
+  it('reports a provider failure as a safe upstream_error, in JSON and in the stream', async () => {
+    const fake = await startFakeGroq(() => ({status: 401}));
+    fakeGroqs.push(fake);
+    const {base, lines} = await start(cfg(fake));
+
+    const json = await post(base, {text: NOTES, category: 'CS'});
+    expect(json.status).toBe(502);
+    expect((await errorOf(json)).code).toBe('upstream_error');
+
+    const stream = await post(base, {text: NOTES, category: 'CS'}, 'text/event-stream');
+    expect(stream.status).toBe(200); // headers were already sent; the failure travels as an event
+    const text = await stream.text();
+    const last = JSON.parse(text.trim().split('\n\n').at(-1)!.replace(/^data: /, '')) as SummarizeEvent;
+    expect(last).toMatchObject({type: 'error', error: {code: 'upstream_error'}});
+
+    for (const out of [text, lines.join('\n')]) {
+      expect(out).not.toContain(SECRET);
+      expect(out).not.toContain('sk-secret-body');
+    }
+  });
+
+  it('logs metadata about a summarization but never the document text', async () => {
+    const fake = await startFakeGroq(() => MODEL_REPLY);
+    fakeGroqs.push(fake);
+    const {base, lines} = await start(cfg(fake));
+    await post(base, {text: NOTES, category: 'CS', title: 'Secret Thesis Title'});
+    const all = lines.join('\n');
+    expect(all).toContain('summarize_completed');
+    expect(all).not.toContain('Paxos and Raft');
+    expect(all).not.toContain('Secret Thesis Title');
+  });
+
+  it('refuses a new request while the summarizer is at its concurrency limit', async () => {
+    const fake = await startFakeGroq(() => 'hang');
+    fakeGroqs.push(fake);
+    const {base} = await start({...cfg(fake), LLM_MAX_CONCURRENT: '1'});
+    const first = new AbortController();
+    const running = fetch(`${base}/api/summarize`, {
+      method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify({text: NOTES, category: 'CS'}),
+      signal: first.signal,
+    }).catch(() => undefined);
+    await new Promise((r) => setTimeout(r, 300));
+    const second = await post(base, {text: NOTES, category: 'CS'});
+    expect(second.status).toBe(429);
+    expect((await errorOf(second)).code).toBe('rate_limited');
+
+    // Hanging up cancels the in-flight model call and frees the slot.
+    first.abort();
+    await running;
+    await new Promise((r) => setTimeout(r, 200));
+    const before = fake.calls.length;
+    const again = new AbortController();
+    const third = fetch(`${base}/api/summarize`, {
+      method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify({text: NOTES, category: 'CS'}),
+      signal: again.signal,
+    }).catch(() => undefined);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(fake.calls.length).toBe(before + 1); // accepted (a 429 would never reach the model)
+    again.abort();
+    await third;
   });
 });
 

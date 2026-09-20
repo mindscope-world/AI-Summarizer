@@ -32,7 +32,8 @@ import {
   SplitSquareVertical, 
   Eye,
   FileCheck,
-  CheckCircle2
+  CheckCircle2,
+  AlertCircle
 } from 'lucide-react';
 import { DocumentSummary, DiscussionQuestion, ReviewMilestoneTask } from '../types';
 import { getCategoryBadgeStyles, cn } from '../lib/utils';
@@ -932,6 +933,18 @@ export const MainEditorView: React.FC<MainEditorViewProps> = ({
                   {para}
                 </p>
               ))}
+
+              {/* Things the reader should double-check (e.g. figures not found in the source) */}
+              {currentDoc.summaryWarnings && currentDoc.summaryWarnings.length > 0 && (
+                <ul className="space-y-1 rounded-xl bg-amber-50 border border-amber-200 p-2.5 text-[11px] text-amber-900">
+                  {currentDoc.summaryWarnings.map((w) => (
+                    <li key={w} className="flex gap-1.5">
+                      <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-px text-amber-600" />
+                      <span>{w}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
 
               {/* Bullet points with bold lead-ins and interactive review checkboxes */}
               <div className="space-y-3 relative">
