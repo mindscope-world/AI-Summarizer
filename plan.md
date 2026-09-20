@@ -13,7 +13,8 @@
 |---|---|
 | 0 Baseline & housekeeping | Done, except reading the PDF / locking D1-D5 (PDF unreadable from the dev environment; defaults in §3 assumed) |
 | 1 Backend foundation | Done |
-| 2 Ingestion & preprocessing | Done. OCR uses Gemini (not Tesseract); its live path is untested without a real API key |
+| 2 Ingestion & preprocessing | Done. Scanned-PDF OCR uses an open-weights vision model (`qwen/qwen3.8-27b`) through LangChain + Groq; verified live on an image-only PDF |
+| LLM provider swap | Done: Gemini removed; LangChain (`@langchain/groq`) + open-weights Qwen on Groq is the model layer for OCR now and summarization in Phase 3 |
 | 3-8 | Not started |
 
 ---
@@ -64,7 +65,7 @@
 
 | # | Decision | Recommendation | Why |
 |---|---|---|---|
-| D1 | Backend stack: **Node/Express + Gemini** vs **Python (Django/Flask/FastAPI) + HF BERT/T5** | **Node/Express + Gemini** unless the PDF *requires* self-hosted BERT/T5 | Deps and `metadata.json` already point there; one language; far less infra. Real BERT/T5 fine-tuning needs GPUs and a labelled corpus we don't have. Keep the model behind an interface so a Python service can be swapped in. |
+| D1 | Backend stack: **Node/Express + LangChain with open-weights models (Groq)** vs **Python (Django/Flask/FastAPI) + HF BERT/T5** | **Node/Express + LangChain + open-weights models on Groq** (decided) unless the PDF *requires* self-hosted BERT/T5 | Deps and `metadata.json` already point there; one language; far less infra. Real BERT/T5 fine-tuning needs GPUs and a labelled corpus we don't have. Keep the model behind an interface so a Python service can be swapped in. |
 | D2 | Persistence/auth: **real Supabase** vs SQLite + custom auth | **Real Supabase** (Auth + Postgres + Storage) | Code already models Supabase; diagram wants "database & cloud storage"; RLS gives per-user isolation cheaply. |
 | D3 | Privacy stance for coursework sent to a hosted LLM | Add consent notice + drop the "no data to public LLMs" claim; use paid API tier (no training on inputs) | Honest and defensible. |
 | D4 | What "retraining" means in stage 6 | Phase 6a: collect + analyse feedback, few-shot/prompt tuning from top-rated examples. Phase 6b (optional): fine-tune | Fine-tuning is out of reach without data volume; the loop can still be real. |
@@ -87,7 +88,7 @@ Size key: **S** ≈ ≤½ day · **M** ≈ 1–2 days · **L** ≈ 3–5 days (r
 
 ### Phase 1 — Backend foundation (M)
 - Create `server/` (Express + TS via `tsx`): `index.ts`, `routes/{extract,summarize,documents,feedback,export}.ts`, `lib/{env,logger,errors}.ts`.
-- Config via `dotenv` + schema validation (fail fast if `GEMINI_API_KEY` missing). **Key stays server-side only**; verify it never appears in the Vite bundle.
+- Config via `dotenv` + schema validation (fail fast if `GROQ_API_KEY` missing). **Key stays server-side only**; verify it never appears in the Vite bundle.
 - Vite dev proxy `/api → :3001`; production: Express serves `dist/`.
 - Middleware: `zod` request validation, per-user rate limiting, body/upload size limits, structured error responses, request IDs.
 - Wire `SettingsModal` to a real `GET /api/health` + configurable base URL (default `/api`) instead of the fake `:8000` text.
@@ -97,7 +98,7 @@ Size key: **S** ≈ ≤½ day · **M** ≈ 1–2 days · **L** ≈ 3–5 days (r
 
 ### Phase 2 — Ingestion & preprocessing (L) — diagram stages 1–2
 Server pipeline `server/pipeline/`:
-1. **Extract** (`extract.ts`): PDF → `pdfjs-dist`/`pdf-parse`; DOCX → `mammoth`; TXT/MD direct; **scanned PDF fallback** → OCR (`tesseract.js`, or Gemini vision as the alternative). Detect "no text layer" → OCR.
+1. **Extract** (`extract.ts`): PDF → `pdfjs-dist`/`pdf-parse`; DOCX → `mammoth`; TXT/MD direct; **scanned PDF fallback** → OCR (implemented with a vision-capable open-weights model via LangChain instead of `tesseract.js`). Detect "no text layer" → OCR.
 2. **URL ingest**: fetch + readability extraction. **Must include SSRF protection** (block private/loopback/link-local ranges, redirects re-validated, size/time caps, allow http/https only).
 3. **Clean** (`clean.ts`): strip headers/footers/page numbers, de-hyphenate, normalise whitespace/unicode, drop references section (configurable).
 4. **Language detect** (`franc`-style) → feeds prompt + validates the user's language choice; flag Swahili/English/mixed.
@@ -112,14 +113,14 @@ Client (`NewSummaryModal.tsx`):
 **Exit:** PDF, DOCX, TXT, URL and pasted text each return clean text with correct word count; a scanned PDF fixture goes through OCR; SSRF test cases blocked.
 
 ### Phase 3 — AI summarization core (L) — diagram stage 3
-- `server/ai/provider.ts`: `Summarizer` interface + Gemini implementation (`@google/genai`), so D1 can change without touching routes.
+- `server/ai/model.ts`: LangChain `BaseChatModel` factory (`ChatGroq`, open-weights Qwen), so the provider can change without touching routes.
 - **Structured output**: request JSON matching the fields the UI already renders — `contentParagraphs`, `bulletPoints{title,text}`, `discussionQuestions{question,context}`, `excerpt`, `tags`, `emotionalTone`, `promptQuestion`. Validate with `zod`; retry once on schema failure.
 - Controls actually honoured: **abstractive vs extractive** (extractive = sentence-selection prompt or TextRank pre-pass so output quotes the source), **length** (concise/balanced/detailed → word budgets), **language** (English/Swahili), discipline/category.
 - **Long documents:** map-reduce over Phase 2 chunks (summarise chunks → merge), with token guard.
 - **Real progress:** `POST /api/summarize` streams SSE stage events; replace the fake `setInterval` stepper in `NewSummaryModal` with the real stages (extract → clean → detect → segment → summarise → format) and real error/cancel handling.
 - **Real metadata:** compute `originalWordCount`, `summaryWordCount`, `reductionRate`, `processingTime`, `modelUsed` from the run. **Delete the hard-coded ROUGE constants.**
 - Replace `handleGenerateQuestionAI` with `POST /api/questions` (uses the doc's summary + source).
-- Rename model options to what they are (e.g. "Gemini — Abstractive", "Extractive (TextRank)") across `NewSummaryModal`, `SettingsModal`, `ArchitectureModal`, `LandingView` demo labels; align `SummarizeJobConfig` with the actual options.
+- Rename model options to what they are (e.g. "Qwen 3.8 27B (Groq) — Abstractive", "Extractive (TextRank)") across `NewSummaryModal`, `SettingsModal`, `ArchitectureModal`, `LandingView` demo labels; align `SummarizeJobConfig` with the actual options.
 - **Grounding guardrail:** instruct model to use only the source; add a lightweight check that key numbers/named entities in the summary appear in the source, and surface a warning if not.
 
 **Exit:** uploading a real lecture PDF produces a sensible structured summary in ≤ target latency; extractive output is verifiably quoted from source; a 100+ page doc succeeds via map-reduce.
@@ -157,7 +158,7 @@ Client (`NewSummaryModal.tsx`):
 - **Security review:** upload MIME sniffing, size/page limits, prompt-injection handling for untrusted document text (delimit source, ignore embedded instructions, never let output trigger actions), rate limits, CORS, secrets scan, dependency audit.
 - **Accessibility & responsiveness** pass on the modals and editor; keyboard focus traps for modals (none today).
 - **Performance:** code-split `LandingView` (1,163 lines) and `MainEditorView` (1,210 lines); lazy-load tabs; avoid re-rendering the whole doc list on each edit.
-- Dockerfile + deploy config (D5), `.env.example` updated (Supabase URL/anon key, service key, `GEMINI_API_KEY`, `APP_URL`), health check, basic logging/error monitoring.
+- Dockerfile + deploy config (D5), `.env.example` updated (Supabase URL/anon key, service key, `GROQ_API_KEY`, `APP_URL`), health check, basic logging/error monitoring.
 - Truthfulness sweep of all marketing/UI copy (compliance claims, "fine-tuned", ROUGE targets, user-count style stats on Landing).
 
 **Exit:** CI green; security checklist signed off; deployed staging URL passes the smoke test.

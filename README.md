@@ -11,13 +11,13 @@ AI-assisted summarization of university academic materials (lecture notes, paper
 ## Requirements
 
 - Node.js >= 20 (developed on 22)
-- A Gemini API key (server-side only)
+- A Groq API key (server-side only; free tier available at https://console.groq.com/keys). Groq serves open-weights models through LangChain.
 
 ## Setup
 
 ```bash
 npm ci
-cp .env.example .env      # then set GEMINI_API_KEY
+cp .env.example .env      # then set GROQ_API_KEY
 npm run dev               # API on :3001 + web app on :3000
 ```
 
@@ -39,16 +39,22 @@ CLIENT_PORT=3100 npm run dev
 | `npm test` | Vitest: server (env, middleware, routes, ingestion pipeline, SSRF guard) and client (`src/lib/api`, the new-summary modal in jsdom) |
 | `npm run build` | `vite build` to `dist/`, and bundle the server to `server.js` |
 | `npm start` | Production: `node server.js`, serving the API and `dist/` on one port |
-| `npm run verify:bundle` | Fails if `dist/` contains secret values or `GEMINI_API_KEY` |
+| `npm run verify:bundle` | Fails if `dist/` contains secret values, server-only setting names or a `gsk_...` key |
 | `npm run clean` | Remove `dist/` and `server.js` |
 
 ## Configuration
 
-All variables are read by the server only (`server/lib/env.ts`) and validated at start-up. The server exits with a readable message if `GEMINI_API_KEY` is missing or still the placeholder. Never prefix a secret with `VITE_`: that would ship it to the browser.
+All variables are read by the server only (`server/lib/env.ts`) and validated at start-up. The server exits with a readable message if `GROQ_API_KEY` is missing or still the placeholder. Never prefix a secret with `VITE_`: that would ship it to the browser.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `GEMINI_API_KEY` | required | Gemini API key |
+| `GROQ_API_KEY` | required | Groq API key |
+| `LLM_MODEL` | `qwen/qwen3.8-27b` | Open-weights chat model for summarization |
+| `OCR_MODEL` | `qwen/qwen3.8-27b` | Vision-capable open-weights model that reads scanned PDFs |
+| `OCR_MAX_PAGES` | `20` | Refuse scanned PDFs with more pages (one API call per page) |
+| `LLM_TIMEOUT_MS` | `60000` | Per-request timeout to the model |
+| `LLM_MAX_RETRIES` | `3` | Automatic retries on 429/5xx |
+| `GROQ_BASE_URL` | Groq's API | Optional proxy / compatible server |
 | `PORT` | `3001` | API port (Cloud Run injects this) |
 | `NODE_ENV` | `development` | `development`, `production` or `test` |
 | `APP_URL` | unset | Public URL of the deployment |
@@ -62,7 +68,6 @@ All variables are read by the server only (`server/lib/env.ts`) and validated at
 | `MAX_EXTRACTED_CHARS` | `3000000` | Refuse documents with more text than this |
 | `URL_FETCH_TIMEOUT_MS` | `15000` | Total time allowed to fetch a URL |
 | `URL_FETCH_MAX_MB` | `10` | Max size of a fetched page (measured after decompression) |
-| `GEMINI_OCR_MODEL` | `gemini-2.5-flash` | Model used to read scanned PDFs |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
 
 ## Architecture
@@ -74,6 +79,7 @@ src/                    React app (Vite, Tailwind 4)
 server/
   index.ts              entrypoint: env, logger, listen, graceful shutdown
   app.ts                middleware stack + route mounting + static hosting
+  ai/                   LangChain chat-model factory (the only place a vendor SDK is imported)
   lib/                  env (zod), logger, errors, meta
   middleware/           requestId, accessLog, rateLimit, validate (zod), upload (multer)
   routes/               health, extract, summarize, documents, feedback, export
@@ -93,7 +99,8 @@ server/pipeline/
   docx.ts        mammoth
   html.ts        Readability main-article extraction (linkedom)
   text.ts        UTF-8/UTF-16 BOM, Windows-1252 fallback
-  ocr.ts         Gemini transcription for PDFs with no text layer
+  rasterize.ts   renders PDF pages to images (pdf.js + @napi-rs/canvas)
+  ocr.ts         vision-model transcription of scanned pages, via LangChain
   safeFetch.ts   SSRF-safe URL fetching (see below)
   clean.ts       ligatures, zero-width chars, hyphenation, hard-wrap reflow, headers/footers, page numbers
   language.ts    franc-based; only real prose votes, so technical text is not mislabelled
@@ -103,7 +110,7 @@ server/pipeline/
 
 Behaviour worth knowing:
 
-- **Scanned PDFs** (fewer than ~20 characters of text per page) are sent to Gemini for OCR. **This transmits the document to Google's API**; the result carries a warning saying OCR was used and to check it. Without an OCR provider such files are rejected with a clear message.
+- **Scanned PDFs** (fewer than ~20 characters of text per page) are rendered to images and transcribed page by page by an open-weights vision model (default `qwen/qwen3.8-27b`) through LangChain's `ChatGroq`. **This sends the page images to Groq's hosted API**; the model is open-weights but it is not running on your own hardware. The result carries a warning saying OCR was used and to check it. Free-tier limits (about 1,000 requests/day and 8,000 tokens/minute per model) mean a scanned document costs roughly one request and ~1.5k tokens per page, so long scans are slow; failures show a clear message rather than provider details.
 - **URLs** are fetched only over http/https, with every resolved address checked against private, loopback, link-local, multicast and reserved ranges (including cloud metadata, IPv4-mapped IPv6 and numeric host tricks). The check happens inside the connection's own DNS lookup, so DNS rebinding cannot swap in an internal address; redirects are re-validated hop by hop; time and decompressed size are capped.
 - **Language** is `und` (undetermined) rather than a guess when there is no running prose to judge by, and `mixed` is only reported between supported languages (English, Swahili, French).
 - Documents are processed in memory and never written to disk. Logs contain metadata only.
@@ -126,7 +133,7 @@ The target pipeline follows the 6-stage workflow in the project documentation: i
 
 ## Security notes
 
-- The Gemini key lives only in the server process. `npm run verify:bundle` runs in CI to prove it never reaches the client bundle.
+- The Groq key lives only in the server process (in a git-ignored `.env`). `npm run verify:bundle` runs in CI to prove it never reaches the client bundle.
 - Auth and storage in the UI are still **simulated in the browser** (`src/lib/supabaseAuth.ts`, `localStorage`) until Phase 4. Do not treat them as real access control.
 - Accounts in `DEMO_CAMPUS_ACCOUNTS` are fictional (`*.example` addresses).
 

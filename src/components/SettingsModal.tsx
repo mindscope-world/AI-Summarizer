@@ -146,6 +146,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
                     <span className="text-emerald-700 truncate">
                       Connected &middot; v{connection.health.version} &middot; {connection.health.environment} &middot; {connection.latencyMs} ms
+                      {connection.health.ai && ` \u00B7 ${connection.health.ai.provider}: ${connection.health.ai.model}`}
                     </span>
                   </>
                 )}

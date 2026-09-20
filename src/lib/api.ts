@@ -174,6 +174,11 @@ export function describeApiError(err: unknown): string {
         return 'This is taking too long. Try a smaller file or try again later.';
       case 'rate_limited':
         return 'You are going too fast. Wait a minute and try again.';
+      case 'http_error':
+        // A 5xx with no structured body means something in front of the API (proxy, load balancer) failed.
+        return err.status >= 500
+          ? 'The server is not responding correctly. Make sure it is running, then try again.'
+          : err.message;
       default:
         return err.message;
     }

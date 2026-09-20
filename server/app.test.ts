@@ -7,18 +7,21 @@ import {loadEnv} from './lib/env';
 import {createLogger} from './lib/logger';
 import type {IngestDeps} from './pipeline/ingest';
 import type {OcrProvider} from './pipeline/ocr';
-import {makeDocx, makePdf} from './testing/fixtures';
+import {makeDocx, makePdf, makeScannedPdf} from './testing/fixtures';
+import {startFakeGroq, type FakeGroq} from './testing/fakeGroq';
+import {createCanvas} from '@napi-rs/canvas';
 import {startFixtureServer, type FixtureServer} from './testing/httpServer';
 
 const SECRET = 'test-secret-key-do-not-leak';
 const servers: Server[] = [];
 
-async function start(overrides: Record<string, string> = {}, ingestion: Partial<IngestDeps> = {}) {
-  const env = loadEnv({GEMINI_API_KEY: SECRET, NODE_ENV: 'test', ...overrides});
+/** `ingestion: null` keeps the app's real default OCR provider (used with a fake Groq server). */
+async function start(overrides: Record<string, string> = {}, ingestion: Partial<IngestDeps> | null = {}) {
+  const env = loadEnv({GROQ_API_KEY: SECRET, NODE_ENV: 'test', ...overrides});
   const lines: string[] = [];
   const logger = createLogger('debug', (line) => lines.push(line));
   // Never let a test reach the real OCR provider.
-  const app = createApp({env, logger, staticDir: false, ingestion: {ocr: undefined, ...ingestion}});
+  const app = createApp({env, logger, staticDir: false, ingestion: ingestion === null ? undefined : {ocr: undefined, ...ingestion}});
   const server = await new Promise<Server>((resolve) => {
     const s = app.listen(0, () => resolve(s));
   });
@@ -28,10 +31,12 @@ async function start(overrides: Record<string, string> = {}, ingestion: Partial<
 }
 
 const fixtures: FixtureServer[] = [];
+const fakeGroqs: FakeGroq[] = [];
 
 afterEach(async () => {
   await Promise.all(servers.splice(0).map((s) => new Promise((r) => s.close(r))));
   await Promise.all(fixtures.splice(0).map((f) => f.close()));
+  await Promise.all(fakeGroqs.splice(0).map((f) => f.close()));
 });
 
 async function errorOf(res: Response): Promise<ApiErrorBody['error']> {
@@ -46,6 +51,7 @@ describe('GET /api/health', () => {
     const body = (await res.json()) as HealthResponse;
     expect(body).toMatchObject({status: 'ok', service: 'leaderforge-academic-summarizer', environment: 'test'});
     expect(typeof body.uptimeSeconds).toBe('number');
+    expect(body.ai).toEqual({provider: 'groq', model: 'qwen/qwen3.8-27b', ocrModel: 'qwen/qwen3.8-27b'});
     expect(JSON.stringify(body)).not.toContain(SECRET);
     expect(res.headers.get('cache-control')).toBe('no-store');
     expect(res.headers.get('x-content-type-options')).toBe('nosniff');
@@ -361,3 +367,63 @@ describe('logging', () => {
     expect(all).not.toContain(SECRET);
   });
 });
+
+describe('AI provider wiring (Groq via LangChain, against a fake server)', () => {
+  const scannedPdf = () => {
+    const canvas = createCanvas(300, 400);
+    canvas.getContext('2d').fillRect(0, 0, 300, 400);
+    return makeScannedPdf([{jpeg: canvas.toBuffer('image/jpeg', 80), width: 300, height: 400}]);
+  };
+  const upload = (base: string, data: Buffer) => {
+    const form = new FormData();
+    form.append('file', new Blob([new Uint8Array(data)]), 'scan.pdf');
+    return fetch(`${base}/api/extract`, {method: 'POST', body: form});
+  };
+
+  it('health reports configured models from env, never the key', async () => {
+    const {base} = await start({LLM_MODEL: 'openai/gpt-oss-120b', OCR_MODEL: 'qwen/qwen3.8-27b'});
+    const body = (await (await fetch(`${base}/api/health`)).json()) as HealthResponse;
+    expect(body.ai).toEqual({provider: 'groq', model: 'openai/gpt-oss-120b', ocrModel: 'qwen/qwen3.8-27b'});
+    expect(JSON.stringify(body)).not.toContain(SECRET);
+  });
+
+  it('reads a scanned PDF through the default OCR provider and reports it', async () => {
+    const fake = await startFakeGroq(() => 'Consensus protocols such as Paxos and Raft let nodes agree on one value even when some fail.');
+    fakeGroqs.push(fake);
+    const {base} = await start({GROQ_BASE_URL: fake.url, OCR_MODEL: 'my/vision-model', LLM_MAX_RETRIES: '0'}, null);
+
+    const res = await upload(base, scannedPdf());
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as ExtractionResult;
+    expect(body.source).toMatchObject({format: 'pdf', pageCount: 1, ocrUsed: true});
+    expect(body.text).toContain('Paxos and Raft');
+    expect(body.warnings.join(' ')).toContain('groq:my/vision-model');
+
+    expect(fake.calls).toHaveLength(1);
+    expect(fake.calls[0].authorization).toBe(`Bearer ${SECRET}`);
+    expect(fake.calls[0].body.model).toBe('my/vision-model');
+  });
+
+  it('returns a clean 502 (no upstream details, no key) when the provider rejects the key', async () => {
+    const fake = await startFakeGroq(() => ({status: 401}));
+    fakeGroqs.push(fake);
+    const {base, lines} = await start({GROQ_BASE_URL: fake.url, LLM_MAX_RETRIES: '0'}, null);
+    const res = await upload(base, scannedPdf());
+    expect(res.status).toBe(502);
+    const err = await errorOf(res);
+    expect(err.code).toBe('upstream_error');
+    expect(err.message).toMatch(/rejected the server/);
+    expect(JSON.stringify(err)).not.toContain(SECRET);
+    expect(lines.join('\n')).not.toContain(SECRET);
+  });
+
+  it('does not call the provider for PDFs that have a text layer', async () => {
+    const fake = await startFakeGroq(() => 'should not be called');
+    fakeGroqs.push(fake);
+    const {base} = await start({GROQ_BASE_URL: fake.url}, null);
+    const res = await upload(base, makePdf([[PROSE]]));
+    expect(res.status).toBe(200);
+    expect(fake.calls).toHaveLength(0);
+  });
+});
+

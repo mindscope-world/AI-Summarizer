@@ -71,3 +71,57 @@ export async function makeDocx(paragraphs: string[]): Promise<Buffer> {
   );
   return zip.generateAsync({type: 'nodebuffer'});
 }
+
+/**
+ * Builds an image-only PDF (no text layer), which is what a scanned document looks like.
+ * Each page is a full-page JPEG.
+ */
+export function makeScannedPdf(pages: {jpeg: Buffer; width: number; height: number}[]): Buffer {
+  const parts: Buffer[] = [];
+  const offsets: number[] = [];
+  let length = 0;
+  const push = (b: Buffer | string) => {
+    const buf = typeof b === 'string' ? Buffer.from(b, 'latin1') : b;
+    parts.push(buf);
+    length += buf.length;
+  };
+  const startObject = (n: number) => {
+    offsets[n] = length;
+    push(`${n} 0 obj\n`);
+  };
+
+  push('%PDF-1.4\n');
+  startObject(1);
+  push('<< /Type /Catalog /Pages 2 0 R >>\nendobj\n');
+  startObject(2);
+  push(`<< /Type /Pages /Kids [${pages.map((_, i) => `${3 + i * 3} 0 R`).join(' ')}] /Count ${pages.length} >>\nendobj\n`);
+
+  pages.forEach((page, i) => {
+    const pageObj = 3 + i * 3;
+    const contentObj = pageObj + 1;
+    const imageObj = pageObj + 2;
+    const content = `q ${page.width} 0 0 ${page.height} 0 0 cm /Im0 Do Q`;
+
+    startObject(pageObj);
+    push(
+      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${page.width} ${page.height}] ` +
+        `/Resources << /XObject << /Im0 ${imageObj} 0 R >> >> /Contents ${contentObj} 0 R >>\nendobj\n`,
+    );
+    startObject(contentObj);
+    push(`<< /Length ${content.length} >>\nstream\n${content}\nendstream\nendobj\n`);
+    startObject(imageObj);
+    push(
+      `<< /Type /XObject /Subtype /Image /Width ${page.width} /Height ${page.height} /ColorSpace /DeviceRGB ` +
+        `/BitsPerComponent 8 /Filter /DCTDecode /Length ${page.jpeg.length} >>\nstream\n`,
+    );
+    push(page.jpeg);
+    push('\nendstream\nendobj\n');
+  });
+
+  const count = 3 + pages.length * 3;
+  const xrefAt = length;
+  push(`xref\n0 ${count}\n0000000000 65535 f \n`);
+  for (let n = 1; n < count; n++) push(`${String(offsets[n]).padStart(10, '0')} 00000 n \n`);
+  push(`trailer\n<< /Size ${count} /Root 1 0 R >>\nstartxref\n${xrefAt}\n%%EOF\n`);
+  return Buffer.concat(parts);
+}

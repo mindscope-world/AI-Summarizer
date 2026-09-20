@@ -1,6 +1,7 @@
 import {Router} from 'express';
 import type {HealthResponse} from '../../src/types';
 import type {Env} from '../lib/env';
+import {describeAi} from '../ai/model';
 import {readVersion, SERVICE_NAME} from '../lib/meta';
 
 export function createHealthRouter(env: Env): Router {
@@ -15,6 +16,7 @@ export function createHealthRouter(env: Env): Router {
       environment: env.NODE_ENV,
       uptimeSeconds: Math.round(process.uptime()),
       timestamp: new Date().toISOString(),
+      ai: describeAi(env),
     };
     res.json(body);
   });

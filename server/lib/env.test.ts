@@ -3,7 +3,7 @@ import {EnvError, loadEnv} from './env';
 
 describe('loadEnv', () => {
   it('applies defaults when only the API key is set', () => {
-    const env = loadEnv({GEMINI_API_KEY: 'abc123'});
+    const env = loadEnv({GROQ_API_KEY: 'abc123'});
     expect(env).toMatchObject({
       NODE_ENV: 'development',
       PORT: 3001,
@@ -16,17 +16,17 @@ describe('loadEnv', () => {
     });
   });
 
-  it('fails fast when GEMINI_API_KEY is missing', () => {
+  it('fails fast when GROQ_API_KEY is missing', () => {
     expect(() => loadEnv({})).toThrow(EnvError);
-    expect(() => loadEnv({})).toThrow(/GEMINI_API_KEY/);
+    expect(() => loadEnv({})).toThrow(/GROQ_API_KEY/);
   });
 
   it('rejects the placeholder key from .env.example', () => {
-    expect(() => loadEnv({GEMINI_API_KEY: 'MY_GEMINI_API_KEY'})).toThrow(/placeholder/);
+    expect(() => loadEnv({GROQ_API_KEY: 'MY_GROQ_API_KEY'})).toThrow(/placeholder/);
   });
 
   it('treats empty values as unset so defaults apply', () => {
-    const env = loadEnv({GEMINI_API_KEY: 'k', PORT: '', CORS_ORIGINS: '', APP_URL: ''});
+    const env = loadEnv({GROQ_API_KEY: 'k', PORT: '', CORS_ORIGINS: '', APP_URL: ''});
     expect(env.PORT).toBe(3001);
     expect(env.CORS_ORIGINS).toEqual([]);
     expect(env.APP_URL).toBeUndefined();
@@ -34,7 +34,7 @@ describe('loadEnv', () => {
 
   it('parses and coerces optional settings', () => {
     const env = loadEnv({
-      GEMINI_API_KEY: 'k',
+      GROQ_API_KEY: 'k',
       PORT: '8080',
       NODE_ENV: 'production',
       CORS_ORIGINS: 'https://a.example, https://b.example',
@@ -51,7 +51,7 @@ describe('loadEnv', () => {
   it('reports every problem and never echoes secret values', () => {
     const secret = 'super-secret-value';
     try {
-      loadEnv({GEMINI_API_KEY: secret, PORT: 'not-a-number', LOG_LEVEL: 'loud'});
+      loadEnv({GROQ_API_KEY: secret, PORT: 'not-a-number', LOG_LEVEL: 'loud'});
       expect.unreachable();
     } catch (err) {
       expect(err).toBeInstanceOf(EnvError);

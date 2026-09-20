@@ -39,4 +39,4 @@ jobs:
         run: npm run verify:bundle
         env:
           # A canary secret: the check fails the build if this value ever reaches dist/.
-          GEMINI_API_KEY: ci-canary-secret-value-0123456789
+          GROQ_API_KEY: ci-canary-secret-value-0123456789

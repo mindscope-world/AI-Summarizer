@@ -189,6 +189,9 @@ describe('describeApiError', () => {
     expect(describeApiError(new ApiError('x', 0, 'timeout'))).toMatch(/too long/);
     expect(describeApiError(new ApiError('x', 429, 'rate_limited'))).toMatch(/Wait a minute/);
     expect(describeApiError(new Error('boom'))).toMatch(/Something went wrong/);
+    expect(describeApiError(new ApiError('Server responded with HTTP 500.', 500, 'http_error'))).toMatch(/not responding correctly/);
+    expect(describeApiError(new ApiError('Server responded with HTTP 502.', 502, 'http_error'))).toMatch(/not responding correctly/);
+    expect(describeApiError(new ApiError('Server responded with HTTP 404.', 404, 'http_error'))).toBe('Server responded with HTTP 404.');
   });
 });
 

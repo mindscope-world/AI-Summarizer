@@ -5,8 +5,8 @@
  *
  * Checks for:
  *   1. the actual values of secret-looking variables from the environment and .env
- *   2. the names GEMINI_API_KEY / process.env.GEMINI (would mean a Vite `define` leak)
- *   3. anything shaped like a Google API key (AIza...)
+ *   2. server-only setting names (would mean a Vite `define` leak)
+ *   3. anything shaped like a Groq API key (gsk_...)
  */
 import {existsSync, readdirSync, readFileSync, statSync} from 'node:fs';
 import path from 'node:path';
@@ -44,8 +44,8 @@ const secretValues = Object.entries(candidates)
   .filter(([name, value]) => SECRET_NAME.test(name) && value && value.length >= 8 && !PLACEHOLDER.test(value))
   .map(([name, value]) => ({name, value}));
 
-const forbiddenLiterals = ['GEMINI_API_KEY', 'process.env.GEMINI'];
-const googleKey = /AIza[0-9A-Za-z_-]{35}/;
+const forbiddenLiterals = ['GROQ_API_KEY', 'process.env.GROQ', 'GROQ_BASE_URL'];
+const groqKey = /gsk_[A-Za-z0-9]{20,}/;
 
 const findings = [];
 let scanned = 0;
@@ -60,7 +60,7 @@ for (const file of walk(distDir)) {
   for (const lit of forbiddenLiterals) {
     if (content.includes(lit)) findings.push(`${rel}: contains "${lit}"`);
   }
-  if (googleKey.test(content)) findings.push(`${rel}: contains a Google API key pattern`);
+  if (groqKey.test(content)) findings.push(`${rel}: contains a Groq API key pattern`);
 }
 
 if (findings.length) {

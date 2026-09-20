@@ -13,7 +13,8 @@ import {createExportRouter} from './routes/export';
 import {createExtractRouter} from './routes/extract';
 import {createFeedbackRouter} from './routes/feedback';
 import {createHealthRouter} from './routes/health';
-import {createGeminiOcr} from './pipeline/ocr';
+import {createChatModel} from './ai/model';
+import {createLlmOcr} from './pipeline/ocr';
 import type {IngestDeps} from './pipeline/ingest';
 import {createSummarizeRouter} from './routes/summarize';
 
@@ -51,7 +52,11 @@ export function createApp({env, logger, staticDir, ingestion}: AppOptions): Expr
       urlTimeoutMs: env.URL_FETCH_TIMEOUT_MS,
       urlMaxBytes: Math.round(env.URL_FETCH_MAX_MB * 1024 * 1024),
     },
-    ocr: createGeminiOcr({apiKey: env.GEMINI_API_KEY, model: env.GEMINI_OCR_MODEL}),
+    ocr: createLlmOcr({
+      model: createChatModel(env, {model: env.OCR_MODEL}),
+      name: `groq:${env.OCR_MODEL}`,
+      maxPages: env.OCR_MAX_PAGES,
+    }),
     ...ingestion,
   };
 

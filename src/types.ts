@@ -79,19 +79,8 @@ export interface DocumentSummary {
   sourceText?: string;
   sourceMetadata?: SourceMetadata;
   reviewProgress?: DocumentReviewProgress;
-}
-
-export interface SummarizeJobConfig {
-  sourceType: 'file' | 'text' | 'url' | 'library';
-  fileName?: string;
-  fileContent?: string;
-  url?: string;
-  courseCode?: string;
-  summarizationType: 'abstractive' | 'extractive';
-  length: 'concise' | 'balanced' | 'detailed';
-  language: 'English' | 'Swahili' | 'French';
-  model: 'BERT-Academic' | 'T5-EastAfrica' | 'GPT-Academic';
-  category: string;
+  /** Notes about this summary (e.g. figures that could not be found in the source). */
+  summaryWarnings?: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -105,6 +94,8 @@ export interface HealthResponse {
   environment: 'development' | 'production' | 'test';
   uptimeSeconds: number;
   timestamp: string;
+  /** Which open-weights models the server is configured to use (never credentials). */
+  ai: {provider: 'groq'; model: string; ocrModel: string};
 }
 
 export type ApiErrorCode =
@@ -181,4 +172,60 @@ export interface ExtractionResult {
   stats: {paragraphs: number; sentences: number; chunks: number};
   chunks: ExtractionChunk[];
   warnings: string[];
+}
+
+// ---------------------------------------------------------------------------
+// Summarization (POST /api/summarize, POST /api/questions)
+// ---------------------------------------------------------------------------
+
+export type SummaryMode = 'abstractive' | 'extractive';
+export type SummaryLength = 'concise' | 'balanced' | 'detailed';
+export type SummaryLanguage = 'English' | 'Swahili';
+
+export const SUMMARY_TONES = ['Optimistic', 'Analytical & Rigorous', 'Reflective', 'Action-Oriented', 'Critical Review'] as const;
+
+export interface SummaryResult {
+  title: string;
+  contentParagraphs: string[];
+  bulletPoints: {title: string; text: string}[];
+  discussionQuestions: {question: string; context: string}[];
+  promptQuestion: string;
+  emotionalTone: string;
+  tags: string[];
+  excerpt: string;
+  metadata: {
+    model: string;
+    mode: SummaryMode;
+    length: SummaryLength;
+    language: SummaryLanguage;
+    originalWordCount: number;
+    summaryWordCount: number;
+    /** e.g. "94%": how much shorter the summary is than the source. */
+    reductionRate: string;
+    /** How many sections a long document was split into (1 = summarised in one go). */
+    sections: number;
+    processingSeconds: number;
+  };
+  /** Things the reader should double-check (ungrounded figures, degraded features). */
+  warnings: string[];
+}
+
+export interface SummarizeProgress {
+  stage: 'prepare' | 'sections' | 'waiting' | 'synthesize' | 'verify';
+  message: string;
+  /** 0-100, monotonic within a run. */
+  percent: number;
+  current?: number;
+  total?: number;
+}
+
+/** Events streamed by POST /api/summarize when the client asks for text/event-stream. */
+export type SummarizeEvent =
+  | ({type: 'progress'} & SummarizeProgress)
+  | {type: 'result'; result: SummaryResult}
+  | {type: 'error'; error: ApiErrorBody['error']};
+
+export interface GeneratedQuestion {
+  question: string;
+  context: string;
 }
