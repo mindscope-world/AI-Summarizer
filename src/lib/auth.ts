@@ -47,6 +47,26 @@ export interface Auth {
 }
 
 const NOT_CONFIGURED = 'Sign-in is not set up for this app yet. Ask the administrator to configure Supabase.';
+const UNREACHABLE = 'Could not reach the sign-in service. Check your connection and try again.';
+
+/** How long a sign-in or sign-up may take before the user is told it failed. */
+export const AUTH_TIMEOUT_MS = 15_000;
+
+/**
+ * Settles with `fallback` if `work` rejects or has not settled within `ms`, so a sign-in button never
+ * stays on "Please wait..." (an unreachable or paused Supabase project can leave requests hanging).
+ * A late success still signs the person in through onAuthStateChange.
+ */
+function withTimeout<T>(work: () => Promise<T>, ms: number, fallback: T): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<T>((resolve) => {
+    timer = setTimeout(() => resolve(fallback), ms);
+  });
+  const settled = Promise.resolve()
+    .then(work)
+    .catch(() => fallback);
+  return Promise.race([settled, late]).finally(() => clearTimeout(timer));
+}
 
 /** A neutral initials badge for people who have no picture, so the UI never shows a broken image. */
 export function initialsAvatar(name: string): string {
@@ -104,7 +124,7 @@ function toUser(user: User, profile: Partial<ProfileRow> | null): AcademicUser {
 }
 
 /** Auth state for the app, backed by a Supabase client (or none, when Supabase is not configured). */
-export function createAuth(client: SupabaseClient | null): Auth {
+export function createAuth(client: SupabaseClient | null, {timeoutMs = AUTH_TIMEOUT_MS}: {timeoutMs?: number} = {}): Auth {
   let state: AuthState = client ? {status: 'loading'} : {status: 'signedOut'};
   const listeners = new Set<() => void>();
   let generation = 0;
@@ -144,6 +164,8 @@ export function createAuth(client: SupabaseClient | null): Auth {
   }
 
   const unavailable = async (): Promise<AuthResult> => ({error: NOT_CONFIGURED});
+  const guarded = <T extends AuthResult>(work: () => Promise<T>, fallback: Omit<T, 'error'>): Promise<T> =>
+    withTimeout(work, timeoutMs, {...fallback, error: UNREACHABLE} as T);
 
   return {
     configured: client !== null,
@@ -154,35 +176,43 @@ export function createAuth(client: SupabaseClient | null): Auth {
     },
     async signInWithPassword(email, password) {
       if (!client) return unavailable();
-      const {error} = await client.auth.signInWithPassword({email: email.trim(), password});
-      return {error: friendly(error)};
+      return guarded(async () => {
+        const {error} = await client.auth.signInWithPassword({email: email.trim(), password});
+        return {error: friendly(error)};
+      }, {});
     },
     async signUp({email, password, fullName, institution, studentId, role}) {
       if (!client) return {...(await unavailable()), needsConfirmation: false};
-      const {data, error} = await client.auth.signUp({
-        email: email.trim(),
-        password,
-        options: {
-          emailRedirectTo: window.location.origin,
-          data: {
-            full_name: fullName.trim(),
-            institution: institution?.trim() || undefined,
-            student_id: studentId?.trim() || undefined,
-            role: role === 'researcher' ? 'researcher' : 'student',
+      return guarded(async () => {
+        const {data, error} = await client.auth.signUp({
+          email: email.trim(),
+          password,
+          options: {
+            emailRedirectTo: window.location.origin,
+            data: {
+              full_name: fullName.trim(),
+              institution: institution?.trim() || undefined,
+              student_id: studentId?.trim() || undefined,
+              role: role === 'researcher' ? 'researcher' : 'student',
+            },
           },
-        },
-      });
-      return {error: friendly(error), needsConfirmation: !error && !data.session};
+        });
+        return {error: friendly(error), needsConfirmation: !error && !data.session};
+      }, {needsConfirmation: false});
     },
     async signInWithMagicLink(email) {
       if (!client) return unavailable();
-      const {error} = await client.auth.signInWithOtp({email: email.trim(), options: {emailRedirectTo: window.location.origin}});
-      return {error: friendly(error)};
+      return guarded(async () => {
+        const {error} = await client.auth.signInWithOtp({email: email.trim(), options: {emailRedirectTo: window.location.origin}});
+        return {error: friendly(error)};
+      }, {});
     },
     async signInWithGoogle() {
       if (!client) return unavailable();
-      const {error} = await client.auth.signInWithOAuth({provider: 'google', options: {redirectTo: window.location.origin}});
-      return {error: friendly(error)};
+      return guarded(async () => {
+        const {error} = await client.auth.signInWithOAuth({provider: 'google', options: {redirectTo: window.location.origin}});
+        return {error: friendly(error)};
+      }, {});
     },
     async signOut() {
       if (!client) return;

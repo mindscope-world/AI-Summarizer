@@ -234,6 +234,48 @@ describe('signing in and out', () => {
   });
 });
 
+describe('when the sign-in service does not answer', () => {
+  const never = () => new Promise<never>(() => {});
+
+  it('gives up after the timeout with a message instead of waiting forever', async () => {
+    vi.useFakeTimers();
+    try {
+      const f = fake();
+      f.auth.signInWithPassword.mockImplementation(never);
+      f.auth.signUp.mockImplementation(never);
+      f.auth.signInWithOtp.mockImplementation(never);
+      f.auth.signInWithOAuth.mockImplementation(never);
+      const a = createAuth(f.client, {timeoutMs: 1000});
+      const results = Promise.all([
+        a.signInWithPassword('alice@example.edu', 'pw'),
+        a.signUp({email: 'alice@example.edu', password: 'longenough', fullName: 'Alice'}),
+        a.signInWithMagicLink('alice@example.edu'),
+        a.signInWithGoogle(),
+      ]);
+      await vi.advanceTimersByTimeAsync(1000);
+      const [signIn, signUp, link, google] = await results;
+      for (const r of [signIn, signUp, link, google]) expect(r.error).toMatch(/could not reach the sign-in service/i);
+      expect(signUp.needsConfirmation).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reports a failed request (for example no network) the same way', async () => {
+    const f = fake();
+    f.auth.signInWithPassword.mockRejectedValue(new TypeError('Failed to fetch'));
+    const a = createAuth(f.client);
+    expect((await a.signInWithPassword('alice@example.edu', 'pw')).error).toMatch(/could not reach the sign-in service/i);
+  });
+
+  it('still returns the real answer when it arrives in time', async () => {
+    const f = fake();
+    f.auth.signInWithPassword.mockResolvedValue({error: {message: 'Invalid login credentials', status: 400}} as never);
+    const a = createAuth(f.client, {timeoutMs: 1000});
+    expect((await a.signInWithPassword('alice@example.edu', 'wrong')).error).toBe('Wrong email or password.');
+  });
+});
+
 describe('initialsAvatar', () => {
   it('uses up to two initials and copes with odd names', () => {
     expect(decodeURIComponent(initialsAvatar('Alice Wanjiru Otieno'))).toContain('>AW<');
