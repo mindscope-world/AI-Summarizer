@@ -12,7 +12,7 @@ import { describeApiError, exportDocument } from './lib/api';
 import { toExportDocument } from './lib/documentView';
 import { saveBlob } from './lib/download';
 import { auth, useAuth } from './lib/auth';
-import { supabase } from './lib/supabase';
+import { arrivedFromAuthRedirect, supabase } from './lib/supabase';
 import { createRepository, newId } from './lib/repository';
 import { createFeedbackRepository } from './lib/feedback';
 import { useFeedback } from './lib/useFeedback';
@@ -97,6 +97,16 @@ export default function App() {
       setIsNewSummaryOpen(false);
       setIsSettingsOpen(false);
       setIsCommentsOpen(false);
+    }
+  }, [authState.status]);
+
+  // Coming back from a sign-in link (email confirmation, magic link, Google) opens the workspace,
+  // like signing in from the dialog does. Only once per page load, so signing out still shows Landing.
+  const redirectHandled = useRef(!arrivedFromAuthRedirect);
+  useEffect(() => {
+    if (authState.status === 'signedIn' && !redirectHandled.current) {
+      redirectHandled.current = true;
+      setActiveTab('Dashboard');
     }
   }, [authState.status]);
 
