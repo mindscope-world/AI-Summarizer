@@ -2,16 +2,15 @@ import React from 'react';
 import { 
   Clock, 
   FileText, 
-  Zap, 
-  TrendingUp, 
-  Plus, 
-  BookOpen, 
+  Zap,  
+  Plus,  
   GraduationCap, 
-  Sparkles,
   ArrowUpRight,
   CheckCircle2
 } from 'lucide-react';
 import { DocumentSummary } from '../types';
+import { useAuthUser } from '../lib/useAuthUser';
+import { dashboardStats, formatDuration } from '../lib/insights';
 
 interface DashboardViewProps {
   documents: DocumentSummary[];
@@ -26,9 +25,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onNewDocClick,
   onOpenArchitecture,
 }) => {
-  const totalWordsOriginal = documents.reduce((acc, d) => acc + (d.sourceMetadata?.originalWordCount || 2000), 0);
-  const totalWordsSummary = documents.reduce((acc, d) => acc + (d.sourceMetadata?.summaryWordCount || 400), 0);
-  const hoursSaved = ((totalWordsOriginal - totalWordsSummary) / 200 / 60).toFixed(1); // 200 words per minute average reading speed
+  const authUser = useAuthUser();
+  // Everything below is computed from the student's own summaries; nothing is a placeholder figure.
+  const stats = dashboardStats(documents);
+  const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
   return (
     <div className="flex-1 max-w-6xl mx-auto space-y-6 pb-16 text-xs">
@@ -38,10 +38,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         <div className="space-y-1.5 max-w-xl">
           <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-800 font-semibold text-[11px] border border-emerald-200/60">
             <GraduationCap className="w-3.5 h-3.5 text-emerald-600" />
-            <span>The East Africa University • BCSITP/0003/S24</span>
+            <span>{authUser?.institution ?? 'The East Africa University'}{authUser?.studentId ? ` • ${authUser.studentId}` : ''}</span>
           </div>
           <h1 className="text-xl lg:text-2xl font-bold text-slate-900 tracking-tight">
-            Welcome back, Noel Juma Muhemba
+            Welcome back{authUser ? `, ${authUser.fullName}` : ''}
           </h1>
           <p className="text-slate-500 leading-relaxed text-xs">
             Your automated summarization dashboard is actively synthesizing academic literature, lecture transcripts, and research papers.
@@ -75,8 +75,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </div>
           <div className="pt-1">
             <span className="text-[11px] text-slate-400 font-medium block">Reading Time Saved</span>
-            <span className="text-2xl font-bold text-slate-900">{hoursSaved} hrs</span>
-            <span className="text-[10px] text-emerald-600 font-medium block mt-0.5">↑ 4.2x faster concept review</span>
+            <span className="text-2xl font-bold text-slate-900">{stats.minutesSaved === null ? '—' : formatDuration(stats.minutesSaved)}</span>
+            <span className="text-[10px] text-emerald-600 font-medium block mt-0.5">
+              {stats.measuredCount ? `Estimated from ${plural(stats.measuredCount, 'summary', 'summaries')}, at 200 words per minute` : 'Appears after your first summary'}
+            </span>
           </div>
         </div>
 
@@ -86,8 +88,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </div>
           <div className="pt-1">
             <span className="text-[11px] text-slate-400 font-medium block">Summarized Materials</span>
-            <span className="text-2xl font-bold text-slate-900">{documents.length} Docs</span>
-            <span className="text-[10px] text-purple-600 font-medium block mt-0.5">Across 4 departments</span>
+            <span className="text-2xl font-bold text-slate-900">{plural(stats.documentCount, 'Doc', 'Docs')}</span>
+            <span className="text-[10px] text-purple-600 font-medium block mt-0.5">
+              {stats.categoryCount ? `Across ${plural(stats.categoryCount, 'category', 'categories')}` : 'No categories yet'}
+            </span>
           </div>
         </div>
 
@@ -97,19 +101,21 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </div>
           <div className="pt-1">
             <span className="text-[11px] text-slate-400 font-medium block">Compression Ratio</span>
-            <span className="text-2xl font-bold text-slate-900">83.4%</span>
-            <span className="text-[10px] text-emerald-600 font-medium block mt-0.5">Dense text to salient points</span>
+            <span className="text-2xl font-bold text-slate-900">{stats.compressionPercent === null ? '—' : `${stats.compressionPercent}%`}</span>
+            <span className="text-[10px] text-emerald-600 font-medium block mt-0.5">
+              {stats.measuredCount ? `${stats.originalWords.toLocaleString()} words read down to ${stats.summaryWords.toLocaleString()}` : 'Shorter than the source, once you have summaries'}
+            </span>
           </div>
         </div>
 
         <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-2xs space-y-2">
           <div className="w-9 h-9 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center">
-            <TrendingUp className="w-4 h-4" />
+            <CheckCircle2 className="w-4 h-4" />
           </div>
           <div className="pt-1">
-            <span className="text-[11px] text-slate-400 font-medium block">ROUGE-L Score</span>
-            <span className="text-2xl font-bold text-slate-900">0.88</span>
-            <span className="text-[10px] text-amber-600 font-medium block mt-0.5">High factual consistency</span>
+            <span className="text-[11px] text-slate-400 font-medium block">Fully Reviewed</span>
+            <span className="text-2xl font-bold text-slate-900">{stats.fullyReviewedCount} of {stats.documentCount}</span>
+            <span className="text-[10px] text-amber-600 font-medium block mt-0.5">Summaries you have finished revising</span>
           </div>
         </div>
 
@@ -124,6 +130,16 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <h3 className="font-bold text-slate-900 text-sm">Recent Academic Summaries</h3>
             <span className="text-[11px] text-slate-400">Click to open & edit</span>
           </div>
+
+          {documents.length === 0 && (
+            <div className="py-10 text-center space-y-3">
+              <p className="text-sm font-semibold text-slate-800">No summaries yet</p>
+              <p className="text-[11px] text-slate-500 max-w-xs mx-auto">Upload a PDF or Word file, paste a link or some notes, and your summaries will appear here.</p>
+              <button onClick={onNewDocClick} className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-semibold">
+                Create your first summary
+              </button>
+            </div>
+          )}
 
           <div className="space-y-2.5">
             {documents.slice(0, 5).map((doc) => (
@@ -147,11 +163,13 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   </p>
                 </div>
 
-                <div className="shrink-0 text-right">
-                  <span className="text-[10px] font-mono text-emerald-600 bg-emerald-50 px-2 py-1 rounded-md font-medium">
-                    {doc.sourceMetadata?.reductionRate || '82% compressed'}
-                  </span>
-                </div>
+                {doc.sourceMetadata?.reductionRate && (
+                  <div className="shrink-0 text-right">
+                    <span className="text-[10px] font-mono text-emerald-600 bg-emerald-50 px-2 py-1 rounded-md font-medium">
+                      {doc.sourceMetadata.reductionRate} shorter
+                    </span>
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -159,33 +177,28 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
         {/* Quick Academic Hub (1 col) */}
         <div className="bg-white rounded-3xl p-6 border border-slate-200/80 shadow-xs space-y-4">
-          <h3 className="font-bold text-slate-900 text-sm">East Africa University Hub</h3>
-          
+          <h3 className="font-bold text-slate-900 text-sm">Your Account</h3>
+
           <div className="space-y-3">
             <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200/70">
               <span className="text-[10px] text-emerald-600 font-bold uppercase tracking-wider block mb-1">
-                Active Degree Program
+                Signed in as
               </span>
-              <p className="font-bold text-xs text-slate-900">
-                Bachelor in Computer Science & Information Technology
+              <p className="font-bold text-xs text-slate-900">{authUser?.fullName ?? '—'}</p>
+              <p className="text-[11px] text-slate-500 mt-0.5 capitalize">
+                {authUser ? `${authUser.role}${authUser.institution ? ` • ${authUser.institution}` : ''}` : ''}
               </p>
-              <p className="text-[11px] text-slate-500 mt-0.5">Student ID: BCSITP/0003/S24</p>
-            </div>
-
-            <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200/70">
-              <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block mb-1">
-                Supervisor
-              </span>
-              <p className="font-bold text-xs text-slate-900">Mr. Geoffrey Sagwe</p>
-              <p className="text-[11px] text-slate-500 mt-0.5">Department of Computer Science</p>
+              {authUser?.studentId && <p className="text-[11px] text-slate-500 mt-0.5">Student ID: {authUser.studentId}</p>}
             </div>
 
             <div className="p-3 bg-purple-50/60 rounded-2xl border border-purple-200/70">
               <span className="text-[10px] text-purple-700 font-bold uppercase tracking-wider block mb-1">
                 AI Engine
               </span>
-              <p className="font-bold text-xs text-slate-900">BERT & T5 Multi-Tier Service</p>
-              <p className="text-[11px] text-purple-700 mt-0.5">Extractive & Abstractive Models Ready</p>
+              <p className="font-bold text-xs text-slate-900">{stats.latestModel ?? 'Not used yet'}</p>
+              <p className="text-[11px] text-purple-700 mt-0.5">
+                {stats.latestModel ? 'Model behind your latest summary' : 'Shown after your first summary'}
+              </p>
             </div>
           </div>
         </div>

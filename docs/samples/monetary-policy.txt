@@ -1,0 +1,15 @@
+How Interest Rate Changes Reach the Economy
+
+A central bank usually influences the economy by changing its policy interest rate. The change does not act directly on prices or jobs. It works through a chain of steps known as the transmission mechanism, and each step can be strong or weak depending on the country.
+
+The first step is the cost of borrowing. When the policy rate rises, commercial banks tend to raise the rates they charge on loans and the rates they pay on deposits. Higher loan rates make borrowing for investment or consumption less attractive, so spending slows. When the policy rate falls, the effect runs the other way.
+
+A second channel is the exchange rate. Higher interest rates can attract foreign savers, which raises demand for the local currency. A stronger currency makes imports cheaper, which lowers inflation, but it also makes exports more expensive.
+
+A third channel is expectations. If households and firms believe the central bank will keep inflation low, they set wages and prices more cautiously, which helps the bank reach its target.
+
+Transmission is often weaker where much economic activity happens outside the formal banking system. Traders and farmers who borrow from informal lenders, or who rely on their own savings, do not respond to changes in bank lending rates. In such economies, prices can also be driven mainly by supply shocks, such as a poor harvest or a rise in world fuel prices, which interest rates cannot easily offset.
+
+Because of this, central banks in these settings often combine rate changes with other tools, such as managing foreign exchange reserves and adjusting how much cash banks must hold. Researchers continue to study which combinations work best.
+
+The main point is that a policy rate is a lever with a long and uneven connection to the economy, and its effect depends on how much of the economy is connected to it.

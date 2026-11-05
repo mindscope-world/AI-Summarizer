@@ -1,40 +1,29 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { 
-  Clock, 
-  Smile, 
-  Tag, 
-  Plus, 
-  MessageSquare, 
-  Search, 
-  MoreHorizontal, 
-  RotateCw, 
-  X, 
-  Sparkles, 
-  Mic, 
-  MicOff,
-  Bold, 
-  Italic, 
-  Underline, 
-  Strikethrough, 
-  AlignLeft, 
-  AlignCenter, 
-  AlignRight, 
-  List, 
-  ListOrdered, 
-  Image as ImageIcon, 
-  Link as LinkIcon, 
-  ChevronDown, 
-  Check, 
-  Download, 
-  Copy, 
-  Languages, 
-  BookOpen, 
-  SplitSquareVertical, 
+  Clock,
+  Smile,
+  Tag,
+  Plus,
+  MessageSquare,
+  Search,
+  MoreHorizontal,
+  RotateCw,
+  X,
+  Sparkles,
+  ChevronDown,
+  Check,
+  Download,
+  Copy,
+  BookOpen,
+  SplitSquareVertical,
   Eye,
-  FileCheck,
-  CheckCircle2
+  AlertCircle
 } from 'lucide-react';
-import { DocumentSummary, DiscussionQuestion, ReviewMilestoneTask } from '../types';
+import { DocumentSummary, FeedbackEntry, ReviewMilestoneTask, SummaryLanguage, TranslationLanguage, TRANSLATION_LANGUAGES } from '../types';
+import { describeApiError, generateQuestion, translateSummary } from '../lib/api';
+import { contentIn, languagesOf, originalLanguage, toTranslateRequest } from '../lib/documentView';
+import { LanguageSwitcher } from './LanguageSwitcher';
+import { SummaryFeedback, type FeedbackSubmission } from './SummaryFeedback';
 import { getCategoryBadgeStyles, cn } from '../lib/utils';
 import { ReviewProgressBar } from './ReviewProgressBar';
 
@@ -43,7 +32,13 @@ interface MainEditorViewProps {
   onUpdateDocument: (updated: DocumentSummary) => void;
   onToggleComments: () => void;
   isCommentsOpen: boolean;
-  onExport: (format: 'pdf' | 'docx' | 'txt' | 'md') => void;
+  /** `language` is the language of the summary as currently shown. */
+  onExport: (format: 'pdf' | 'docx' | 'txt' | 'md', language: string) => void;
+  /** The student's existing rating of this summary, and how to save a new one. Omit to hide the rating form. */
+  feedback?: {
+    entry: FeedbackEntry | null;
+    onSubmit: (submission: FeedbackSubmission) => Promise<void>;
+  };
 }
 
 export const MainEditorView: React.FC<MainEditorViewProps> = ({
@@ -52,18 +47,75 @@ export const MainEditorView: React.FC<MainEditorViewProps> = ({
   onToggleComments,
   isCommentsOpen,
   onExport,
+  feedback,
 }) => {
   // View mode
   const [viewMode, setViewMode] = useState<'summary' | 'source' | 'split'>('summary');
   
-  // Rich text formatting state
-  const [fontSize, setFontSize] = useState('14');
-  const [isBold, setIsBold] = useState(false);
-  const [isItalic, setIsItalic] = useState(false);
-  const [isUnderline, setIsUnderline] = useState(false);
-  const [isStrike, setIsStrike] = useState(false);
-  const [alignment, setAlignment] = useState<'left' | 'center' | 'right'>('left');
   
+  // Which language the summary is shown in (null = the document's own), and translation progress
+  const [viewLanguage, setViewLanguage] = useState<string | null>(null);
+  const [translating, setTranslating] = useState<string | null>(null);
+  const [translateError, setTranslateError] = useState<string | null>(null);
+  const translateAbortRef = useRef<AbortController | null>(null);
+  const latestDocRef = useRef(currentDoc);
+  latestDocRef.current = currentDoc;
+  const language = viewLanguage && languagesOf(currentDoc).includes(viewLanguage) ? viewLanguage : originalLanguage(currentDoc);
+  const view = contentIn(currentDoc, language);
+
+  // Another document was opened: forget the language choice and stop any translation in flight.
+  useEffect(() => {
+    setViewLanguage(null);
+    setTranslateError(null);
+    setTranslating(null);
+    translateAbortRef.current?.abort();
+    translateAbortRef.current = null;
+    return () => translateAbortRef.current?.abort();
+  }, [currentDoc.id]);
+
+  const handleCancelTranslate = () => {
+    translateAbortRef.current?.abort();
+    translateAbortRef.current = null;
+    setTranslating(null);
+  };
+
+  const handleTranslate = async (target: string) => {
+    if (translating) return;
+    const controller = new AbortController();
+    translateAbortRef.current = controller;
+    setTranslating(target);
+    setTranslateError(null);
+    try {
+      const result = await translateSummary(toTranslateRequest(currentDoc, target as TranslationLanguage), { signal: controller.signal });
+      if (controller.signal.aborted) return;
+      // Keep any edits made while the model was working.
+      const latest = latestDocRef.current;
+      onUpdateDocument({
+        ...latest,
+        translations: {
+          ...latest.translations,
+          [result.language]: {
+            contentParagraphs: result.contentParagraphs,
+            bulletPoints: result.bulletPoints,
+            discussionQuestions: result.discussionQuestions,
+            promptQuestion: result.promptQuestion,
+            model: result.model,
+            warnings: result.warnings.length ? result.warnings : undefined,
+          },
+        },
+      });
+      setViewLanguage(result.language);
+    } catch (err) {
+      if (controller.signal.aborted || (err instanceof DOMException && err.name === 'AbortError')) return;
+      setTranslateError(describeApiError(err));
+    } finally {
+      if (translateAbortRef.current === controller) {
+        translateAbortRef.current = null;
+        setTranslating(null);
+      }
+    }
+  };
+
   // Search within document
   const [showDocSearch, setShowDocSearch] = useState(false);
   const [docSearchQuery, setDocSearchQuery] = useState('');
@@ -82,14 +134,19 @@ export const MainEditorView: React.FC<MainEditorViewProps> = ({
   const [selectedQuestionSaved, setSelectedQuestionSaved] = useState(false);
 
   // User input reflection text
+  // The source text is fetched when a document is opened; never show made-up placeholder text meanwhile.
+  const sourceTextShown =
+    currentDoc.sourceText === undefined
+      ? 'Loading the original text...'
+      : currentDoc.sourceText || 'The original text is not available for this summary.';
+
   const [userReflection, setUserReflection] = useState(currentDoc.userNotes || '');
   const [isCopied, setIsCopied] = useState(false);
 
-  // Mic dictation state
-  const [isListening, setIsListening] = useState(false);
 
   // AI Prompt generation state
   const [isGeneratingAI, setIsGeneratingAI] = useState(false);
+  const [questionError, setQuestionError] = useState<string | null>(null);
   const [showBottomAIOptions, setShowBottomAIOptions] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
 
@@ -267,7 +324,7 @@ export const MainEditorView: React.FC<MainEditorViewProps> = ({
         completedTaskIds: allTaskIds,
         reviewedBulletIndices: allBulletsReviewed.map((_, i) => i),
         isFullyReviewed: true,
-        lastReviewedAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        lastReviewedAt: new Date().toISOString(),
         preferredMode: progressMode,
       },
     });
@@ -405,34 +462,45 @@ export const MainEditorView: React.FC<MainEditorViewProps> = ({
   };
 
   const handleCopySummary = () => {
-    const textToCopy = `${currentDoc.title}\n\n${currentDoc.contentParagraphs.join('\n\n')}\n\n${currentDoc.bulletPoints.map(b => `${b.title} ${b.text}`).join('\n')}`;
+    const textToCopy = `${currentDoc.title}\n\n${view.contentParagraphs.join('\n\n')}\n\n${view.bulletPoints.map(b => `${b.title} ${b.text}`).join('\n')}`;
     navigator.clipboard.writeText(textToCopy);
     setIsCopied(true);
     setTimeout(() => setIsCopied(false), 2000);
   };
 
-  const handleGenerateQuestionAI = () => {
+  const handleGenerateQuestionAI = async () => {
+    if (isGeneratingAI) return;
     setIsGeneratingAI(true);
-    setTimeout(() => {
-      const newQ: DiscussionQuestion = {
-        id: `dq-gen-${Date.now()}`,
-        question: `How does the evidence in this document influence your approach to academic assessments?`,
-        context: 'Generated by LeaderForge Academic AI based on your coursework profile.',
-      };
+    setQuestionError(null);
+    try {
+      // The model reads the summary in the language it was written in, so the new question lines up with the others.
+      const own = originalLanguage(currentDoc);
+      const language: SummaryLanguage = (TRANSLATION_LANGUAGES as readonly string[]).includes(own) ? (own as SummaryLanguage) : 'English';
+      const generated = await generateQuestion({
+        title: currentDoc.title,
+        language,
+        contentParagraphs: currentDoc.contentParagraphs,
+        bulletPoints: currentDoc.bulletPoints.map(({ title, text }) => ({ title, text })),
+        existingQuestions: currentDoc.discussionQuestions.map((q) => q.question),
+      });
+      const newQ = { id: `dq-gen-${Date.now()}`, question: generated.question, context: generated.context };
       const updatedQuestions = [...currentDoc.discussionQuestions, newQ];
       onUpdateDocument({
         ...currentDoc,
         discussionQuestions: updatedQuestions,
         currentDiscussionIndex: updatedQuestions.length - 1,
       });
-      setIsGeneratingAI(false);
       setShowDiscussionCard(true);
-    }, 800);
+    } catch (err) {
+      setQuestionError(describeApiError(err));
+    } finally {
+      setIsGeneratingAI(false);
+    }
   };
 
-  const activeQuestion = currentDoc.discussionQuestions[currentDoc.currentDiscussionIndex] || {
-    question: 'What small steps have helped you feel more confident lately?',
-    context: 'Start writing and we will soon create an additional question to help you.',
+  const activeQuestion = view.discussionQuestions[currentDoc.currentDiscussionIndex] || {
+    question: 'No discussion question yet.',
+    context: 'Use "Generate a question now" below to have the AI write one from this summary.',
   };
 
   return (
@@ -458,12 +526,23 @@ export const MainEditorView: React.FC<MainEditorViewProps> = ({
             >
               {currentDoc.title}
             </h1>
+            <div className="mt-2">
+              <LanguageSwitcher
+                document={currentDoc}
+                value={language}
+                onChange={setViewLanguage}
+                onTranslate={handleTranslate}
+                onCancel={handleCancelTranslate}
+                translating={translating}
+                error={translateError}
+              />
+            </div>
           </div>
 
           {/* Right Action Icons matching image.png: Edited Dec 02, Comment icon with badge, Search icon, More icon */}
           <div className="flex items-center gap-2 shrink-0">
             <span className="text-xs text-slate-400 font-medium hidden sm:inline">
-              Edited {currentDoc.lastEditedDate || 'Dec 02'}
+              Edited {currentDoc.lastEditedDate || currentDoc.dateBadge}
             </span>
 
             {/* Comment icon button */}
@@ -518,25 +597,32 @@ export const MainEditorView: React.FC<MainEditorViewProps> = ({
                     Export Summary
                   </div>
                   <button
-                    onClick={() => { onExport('pdf'); setShowExportMenu(false); }}
+                    onClick={() => { onExport('pdf', language); setShowExportMenu(false); }}
                     className="w-full text-left px-2.5 py-1.5 hover:bg-slate-50 rounded-lg flex items-center gap-2 text-slate-700"
                   >
                     <Download className="w-3.5 h-3.5 text-slate-400" />
                     <span>Download as PDF</span>
                   </button>
                   <button
-                    onClick={() => { onExport('docx'); setShowExportMenu(false); }}
+                    onClick={() => { onExport('docx', language); setShowExportMenu(false); }}
                     className="w-full text-left px-2.5 py-1.5 hover:bg-slate-50 rounded-lg flex items-center gap-2 text-slate-700"
                   >
                     <Download className="w-3.5 h-3.5 text-slate-400" />
                     <span>Download as Word (.docx)</span>
                   </button>
                   <button
-                    onClick={() => { onExport('txt'); setShowExportMenu(false); }}
+                    onClick={() => { onExport('txt', language); setShowExportMenu(false); }}
                     className="w-full text-left px-2.5 py-1.5 hover:bg-slate-50 rounded-lg flex items-center gap-2 text-slate-700"
                   >
                     <Download className="w-3.5 h-3.5 text-slate-400" />
                     <span>Plain Text (.txt)</span>
+                  </button>
+                  <button
+                    onClick={() => { onExport('md', language); setShowExportMenu(false); }}
+                    className="w-full text-left px-2.5 py-1.5 hover:bg-slate-50 rounded-lg flex items-center gap-2 text-slate-700"
+                  >
+                    <Download className="w-3.5 h-3.5 text-slate-400" />
+                    <span>Markdown (.md)</span>
                   </button>
                   <div className="border-t border-slate-100 my-1"></div>
                   <button
@@ -690,121 +776,8 @@ export const MainEditorView: React.FC<MainEditorViewProps> = ({
 
       </div>
 
-      {/* Editor Formatting Toolbar matching image.png */}
-      <div className="px-6 py-2.5 border-b border-slate-100 bg-white flex items-center justify-between gap-3 flex-wrap">
-        <div className="flex items-center gap-1.5 flex-wrap">
-          
-          {/* Font size dropdown e.g. "14 v" */}
-          <div className="flex items-center gap-1 px-2 py-1 hover:bg-slate-100 rounded-lg text-xs font-medium text-slate-700 cursor-pointer border border-transparent hover:border-slate-200">
-            <span>{fontSize}</span>
-            <ChevronDown className="w-3 h-3 text-slate-400" />
-          </div>
-
-          {/* Typography selector 'T' */}
-          <button 
-            title="Text Style"
-            className="w-7 h-7 rounded-lg flex items-center justify-center font-bold text-xs text-slate-700 hover:bg-slate-100 hover:text-slate-900"
-          >
-            T
-          </button>
-
-          {/* Color dot picker */}
-          <div className="w-7 h-7 rounded-lg flex items-center justify-center hover:bg-slate-100 cursor-pointer">
-            <span className="w-3.5 h-3.5 rounded-full bg-slate-900 ring-2 ring-white shadow-xs" />
-          </div>
-
-          <div className="h-4 w-[1px] bg-slate-200 mx-1" />
-
-          {/* B, I, U, S */}
-          <button
-            onClick={() => setIsBold(!isBold)}
-            className={cn(
-              "w-7 h-7 rounded-lg flex items-center justify-center text-xs font-bold transition-colors",
-              isBold ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100"
-            )}
-          >
-            <Bold className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={() => setIsItalic(!isItalic)}
-            className={cn(
-              "w-7 h-7 rounded-lg flex items-center justify-center text-xs transition-colors",
-              isItalic ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100"
-            )}
-          >
-            <Italic className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={() => setIsUnderline(!isUnderline)}
-            className={cn(
-              "w-7 h-7 rounded-lg flex items-center justify-center text-xs transition-colors",
-              isUnderline ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100"
-            )}
-          >
-            <Underline className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={() => setIsStrike(!isStrike)}
-            className={cn(
-              "w-7 h-7 rounded-lg flex items-center justify-center text-xs transition-colors",
-              isStrike ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100"
-            )}
-          >
-            <Strikethrough className="w-3.5 h-3.5" />
-          </button>
-
-          <div className="h-4 w-[1px] bg-slate-200 mx-1" />
-
-          {/* Alignments */}
-          <button
-            onClick={() => setAlignment('left')}
-            className={cn(
-              "w-7 h-7 rounded-lg flex items-center justify-center text-xs transition-colors",
-              alignment === 'left' ? "bg-slate-100 text-slate-900 font-bold" : "text-slate-500 hover:bg-slate-100"
-            )}
-          >
-            <AlignLeft className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={() => setAlignment('center')}
-            className={cn(
-              "w-7 h-7 rounded-lg flex items-center justify-center text-xs transition-colors",
-              alignment === 'center' ? "bg-slate-100 text-slate-900 font-bold" : "text-slate-500 hover:bg-slate-100"
-            )}
-          >
-            <AlignCenter className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={() => setAlignment('right')}
-            className={cn(
-              "w-7 h-7 rounded-lg flex items-center justify-center text-xs transition-colors",
-              alignment === 'right' ? "bg-slate-100 text-slate-900 font-bold" : "text-slate-500 hover:bg-slate-100"
-            )}
-          >
-            <AlignRight className="w-3.5 h-3.5" />
-          </button>
-
-          <div className="h-4 w-[1px] bg-slate-200 mx-1" />
-
-          {/* Lists */}
-          <button className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-500 hover:bg-slate-100 text-xs">
-            <ListOrdered className="w-3.5 h-3.5" />
-          </button>
-          <button className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-500 hover:bg-slate-100 text-xs">
-            <List className="w-3.5 h-3.5" />
-          </button>
-
-          <div className="h-4 w-[1px] bg-slate-200 mx-1" />
-
-          {/* Media & Link */}
-          <button className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-500 hover:bg-slate-100 text-xs">
-            <ImageIcon className="w-3.5 h-3.5" />
-          </button>
-          <button className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-500 hover:bg-slate-100 text-xs">
-            <LinkIcon className="w-3.5 h-3.5" />
-          </button>
-        </div>
-
+      {/* View mode: the summary alone, the source alone, or both side by side */}
+      <div className="px-6 py-2.5 border-b border-slate-100 bg-white flex items-center justify-end gap-3 flex-wrap">
         {/* View mode toggle: Summary | Source Document | Side by Side */}
         <div className="flex items-center gap-1 bg-slate-100 p-0.5 rounded-xl text-xs font-medium">
           <button
@@ -882,7 +855,7 @@ export const MainEditorView: React.FC<MainEditorViewProps> = ({
             <div className="prose prose-slate max-w-none text-xs text-slate-700 leading-relaxed bg-slate-50/50 p-6 rounded-2xl border border-slate-100 font-mono">
               <p className="font-bold text-sm text-slate-900 mb-2">ORIGINAL TEXT DUMP (PRE-SUMMARIZATION):</p>
               <p>
-                {currentDoc.sourceText || `Title: ${currentDoc.title}\nCoursework Reference: BCSITP/0003/S24 - East Africa University.\nIn recent years, higher education institutions have faced unprecedented volumes of coursework, academic literature, lecture transcripts, and peer-reviewed journals. Students encounter high cognitive burdens when synthesizing dense materials under constrained assignment timelines. In response, modern NLP pipelines utilizing Bidirectional Encoder Representations from Transformers (BERT) provide an automated synthesis framework. By leveraging self-attention mechanisms across input tokens, the model computes salient topic embeddings, preserves semantic consistency, and filters noise...`}
+                {sourceTextShown}
               </p>
             </div>
           </div>
@@ -902,7 +875,7 @@ export const MainEditorView: React.FC<MainEditorViewProps> = ({
                 </div>
                 <div className="text-slate-600 leading-relaxed space-y-2 max-h-[600px] overflow-y-auto pr-2">
                   <p>
-                    {currentDoc.sourceText || `In recent academic environments, processing complex literature requires multiple passes of reading and note-taking. Studies show university students experience academic fatigue when handling lengthy syllabi. The implementation of transformer models bridges this gap by reducing the volume of information while retaining critical methodologies, core arguments, and factual consistency.`}
+                    {sourceTextShown}
                   </p>
                   <p>
                     Every mistake previously experienced caused hesitation. However, systematic reframing converted setbacks into structured learning opportunities, unlocking proactive initiative in coursework selection and collaborative project leadership.
@@ -915,27 +888,39 @@ export const MainEditorView: React.FC<MainEditorViewProps> = ({
             <div className="space-y-6">
               
               {/* Question / Prompt Header matching image.png */}
-              {currentDoc.promptQuestion && (
+              {view.promptQuestion && (
                 <div className="flex items-start gap-2.5">
                   <div className="w-4 h-4 rounded-full bg-slate-900 text-white flex items-center justify-center text-[10px] font-bold shrink-0 mt-0.5">
                     ?
                   </div>
                   <h2 className="text-sm font-bold text-slate-900 tracking-tight leading-snug">
-                    {currentDoc.promptQuestion}
+                    {view.promptQuestion}
                   </h2>
                 </div>
               )}
 
               {/* Introductory paragraphs */}
-              {currentDoc.contentParagraphs.map((para, i) => (
+              {view.contentParagraphs.map((para, i) => (
                 <p key={i} className="text-xs text-slate-700 leading-relaxed">
                   {para}
                 </p>
               ))}
 
+              {/* Things the reader should double-check (e.g. figures not found in the source) */}
+              {view.warnings.length > 0 && (
+                <ul className="space-y-1 rounded-xl bg-amber-50 border border-amber-200 p-2.5 text-[11px] text-amber-900">
+                  {view.warnings.map((w) => (
+                    <li key={w} className="flex gap-1.5">
+                      <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-px text-amber-600" />
+                      <span>{w}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+
               {/* Bullet points with bold lead-ins and interactive review checkboxes */}
               <div className="space-y-3 relative">
-                {currentDoc.bulletPoints.map((item, idx) => {
+                {view.bulletPoints.map((item, idx) => {
                   const isReviewed = !!item.reviewed;
                   return (
                     <div 
@@ -985,7 +970,7 @@ export const MainEditorView: React.FC<MainEditorViewProps> = ({
                     className="flex items-center gap-1 text-[11px] font-semibold text-slate-400 hover:text-emerald-700 bg-slate-50 hover:bg-emerald-50 px-1.5 py-0.5 rounded-md border border-slate-200/80 transition-colors"
                   >
                     <MessageSquare className="w-3 h-3" />
-                    <span>{currentDoc.comments.length || 2}</span>
+                    <span>{currentDoc.comments.length}</span>
                   </button>
                 </div>
               </div>
@@ -1084,8 +1069,13 @@ export const MainEditorView: React.FC<MainEditorViewProps> = ({
                   <span>LeaderForge AI</span>
                 </div>
                 <p className="text-[11px] text-slate-500 leading-relaxed">
-                  Start writing and we will soon create an additional question to help you.
+                  Ask the AI for one more revision question based on this summary.
                 </p>
+                {questionError && (
+                  <p role="alert" className="text-[11px] text-red-700">
+                    {questionError}
+                  </p>
+                )}
                 <div>
                   <button
                     id="generate-question-link-btn"
@@ -1105,6 +1095,8 @@ export const MainEditorView: React.FC<MainEditorViewProps> = ({
                 </div>
               </div>
 
+              {feedback && <SummaryFeedback entry={feedback.entry} onSubmit={feedback.onSubmit} />}
+
             </div>
 
           </div>
@@ -1116,26 +1108,6 @@ export const MainEditorView: React.FC<MainEditorViewProps> = ({
       <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30">
         <div className="bg-white/95 backdrop-blur-md px-3.5 py-2 rounded-full border border-slate-200/90 shadow-lg flex items-center gap-3">
           
-          {/* Microphone Icon Button */}
-          <button
-            id="voice-dictation-mic-btn"
-            onClick={() => {
-              setIsListening(!isListening);
-              if (!isListening) {
-                setUserReflection((prev) => prev ? `${prev} [Audio transcript captured]` : `[Audio transcript captured: Reviewing key principles of machine learning and confidence building.]`);
-              }
-            }}
-            title={isListening ? "Stop listening" : "Voice dictation / Audio lecture"}
-            className={cn(
-              "w-8 h-8 rounded-full flex items-center justify-center transition-all",
-              isListening 
-                ? "bg-red-500 text-white animate-pulse shadow-xs" 
-                : "text-slate-500 hover:text-slate-800 hover:bg-slate-100"
-            )}
-          >
-            {isListening ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
-          </button>
-
           {/* Smiley Icon Button */}
           <button
             id="mood-emotional-tone-btn"
@@ -1176,24 +1148,7 @@ export const MainEditorView: React.FC<MainEditorViewProps> = ({
             </button>
             <button
               onClick={() => {
-                const bullet = {
-                  title: 'Synthesized Insight.',
-                  text: 'Automated summarization reduced cognitive load by over 80% while retaining foundational claims.',
-                };
-                onUpdateDocument({
-                  ...currentDoc,
-                  bulletPoints: [...currentDoc.bulletPoints, bullet],
-                });
-                setShowBottomAIOptions(false);
-              }}
-              className="w-full text-left px-2.5 py-1.5 hover:bg-slate-50 rounded-lg flex items-center gap-2 text-slate-700"
-            >
-              <Plus className="w-3.5 h-3.5 text-teal-600" />
-              <span>Extract Additional Key Point</span>
-            </button>
-            <button
-              onClick={() => {
-                onExport('pdf');
+                onExport('pdf', language);
                 setShowBottomAIOptions(false);
               }}
               className="w-full text-left px-2.5 py-1.5 hover:bg-slate-50 rounded-lg flex items-center gap-2 text-slate-700"

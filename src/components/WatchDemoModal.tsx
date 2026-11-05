@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useModal } from '../lib/useModal';
 import { 
   X, 
   Play, 
@@ -30,40 +31,38 @@ export const WatchDemoModal: React.FC<WatchDemoModalProps> = ({
   const [activeStep, setActiveStep] = useState(0);
   const [isPlaying, setIsPlaying] = useState(true);
 
+  const panelRef = useModal<HTMLDivElement>(isOpen, onClose);
+
   if (!isOpen) return null;
 
   const demoSteps = [
     {
-      title: '1. Ingest Dense Academic Materials',
-      subtitle: 'Upload lecture slides, research PDFs, or paste raw syllabus excerpts.',
-      visual: 'PDF / DOCX Ingestion Pipeline',
-      details: 'Tesseract OCR cleans scanned handouts while tokenizer extracts 4,500 words of technical computer science literature in 1.2s.',
-      stat: '4,500 words raw text',
-      tag: 'Step 1: Input Ingestion'
+      title: '1. Bring in your reading',
+      subtitle: 'Upload a file, paste a link, or paste your notes.',
+      details: 'Upload a PDF, Word, text or Markdown file, paste a web link, or paste your notes. You see the word count and detected language before anything is summarised.',
+      stat: 'PDF, DOCX, TXT, MD and web links',
+      tag: 'Step 1: Input'
     },
     {
-      title: '2. Dual-Tier Transformer Analysis',
-      subtitle: 'BERT semantic embeddings score salience, T5 generates abstractive synthesis.',
-      visual: 'BERT + T5 Transformer Core',
-      details: 'Identifies core claims, mathematical formulas, methodology, and limitations with a 0.865 ROUGE-L factual consistency score.',
-      stat: '83% reading time saved',
-      tag: 'Step 2: AI Processing'
+      title: '2. An AI writes the summary',
+      subtitle: 'Pick the mode, length and language.',
+      details: 'Abstractive mode has an AI model write the summary; extractive mode quotes the key sentences from your document. Figures that are not in the source are flagged for you to check.',
+      stat: 'Concise, balanced or detailed; English or Kiswahili',
+      tag: 'Step 2: Summarise'
     },
     {
-      title: '3. Socratic Active Recall Cards',
-      subtitle: 'Automatically generates discussion questions to test true comprehension.',
-      visual: 'Active Recall Question Engine',
-      details: '"How does self-attention eliminate recurrent sequential bottlenecks?" forces deep cognitive retrieval prior to exams.',
-      stat: '3 Active Recall Prompts',
-      tag: 'Step 3: Retention'
+      title: '3. Revise with questions',
+      subtitle: 'Discussion questions come with every summary.',
+      details: 'Each summary has discussion questions to test your understanding. Ask for another and the AI writes a new one from your summary.',
+      stat: 'Questions, key points and your own notes',
+      tag: 'Step 3: Revise'
     },
     {
-      title: '4. Spaced Repetition & Supervisor Audit',
-      subtitle: 'Automates revision at 1, 3, 7, and 30-day Ebbinghaus intervals.',
-      visual: 'Spaced Scheduling & Commentary',
-      details: 'Course supervisors can review student summaries, highlight key points, and leave annotations directly in the reflection thread.',
-      stat: 'Ebbinghaus Cycle Active',
-      tag: 'Step 4: Mastery'
+      title: '4. Review on a schedule, then export',
+      subtitle: 'Day 1, 3, 7 and 30 after you made the summary.',
+      details: 'The Scheduling view lists what to review and when. Export any summary to PDF, Word, plain text or Markdown.',
+      stat: 'Review days 1, 3, 7 and 30',
+      tag: 'Step 4: Review'
     }
   ];
 
@@ -71,8 +70,13 @@ export const WatchDemoModal: React.FC<WatchDemoModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-md animate-in fade-in duration-200">
-      <div 
-        className="bg-[#111622] text-white w-full max-w-2xl rounded-3xl shadow-2xl border border-slate-700/80 overflow-hidden relative"
+      <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="tour-title"
+        tabIndex={-1}
+        className="bg-[#111622] text-white w-full max-w-2xl rounded-3xl shadow-2xl border border-slate-700/80 overflow-hidden relative outline-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Top bar */}
@@ -82,13 +86,14 @@ export const WatchDemoModal: React.FC<WatchDemoModalProps> = ({
               ▶
             </div>
             <div>
-              <h3 className="text-sm font-bold text-white">Interactive Product Tour</h3>
-              <span className="text-[10px] text-slate-400">Academic Summarization & Socratic Reflection Engine</span>
+              <h3 id="tour-title" className="text-sm font-bold text-white">Product tour</h3>
+              <span className="text-[10px] text-slate-400">Summaries, revision questions and a review schedule</span>
             </div>
           </div>
 
           <button
             onClick={onClose}
+            aria-label="Close"
             className="text-slate-400 hover:text-white p-1 rounded-full hover:bg-slate-800 transition-colors"
           >
             <X className="w-5 h-5" />
@@ -123,7 +128,7 @@ export const WatchDemoModal: React.FC<WatchDemoModalProps> = ({
                 {currentStep.details}
               </p>
               <div className="inline-block px-3 py-1 bg-white/10 rounded-xl border border-white/15 text-xs text-emerald-300 font-semibold mt-2">
-                Metric: {currentStep.stat}
+                {currentStep.stat}
               </div>
             </div>
 
@@ -170,7 +175,7 @@ export const WatchDemoModal: React.FC<WatchDemoModalProps> = ({
               }}
               className="w-full sm:w-auto px-5 py-2.5 bg-white text-slate-900 font-bold text-xs rounded-xl shadow-md hover:bg-slate-100 flex items-center justify-center gap-2 transition-all"
             >
-              <span>Launch Live Workspace</span>
+              <span>Open the workspace</span>
               <ArrowRight className="w-3.5 h-3.5" />
             </button>
           </div>

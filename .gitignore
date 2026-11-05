@@ -6,3 +6,7 @@ coverage/
 *.log
 .env*
 !.env.example
+server.js
+
+# per-document benchmark scores (the aggregate goes in src/data/benchmark.json)
+scripts/eval/results/

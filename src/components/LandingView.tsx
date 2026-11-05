@@ -1,67 +1,47 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
-  Sparkles, 
-  ArrowRight, 
-  Layers, 
-  FileText, 
-  Cpu, 
-  GraduationCap, 
-  CheckCircle2, 
-  Clock, 
-  Zap, 
-  TrendingUp, 
-  Languages, 
-  ShieldCheck, 
-  Brain, 
-  Users, 
-  BookOpen, 
-  RotateCw,
-  FolderKanban,
-  SquarePen,
-  CalendarDays,
-  BarChart3,
-  ExternalLink,
-  ChevronRight,
+  Sparkles,
+  ArrowRight,
+  FileText,
+  GraduationCap,
+  Brain,
+  Users,
+  BookOpen,
   Database,
-  Star,
   Play,
   ArrowDown,
   Lock,
-  LogOut,
   User,
-  Search,
   Check,
-  Code2,
-  ChevronDown
+  Code2
 } from 'lucide-react';
 import { DocumentSummary } from '../types';
-import { supabase, AcademicUser, AcademicSession } from '../lib/supabaseAuth';
+import { auth, useAuth } from '../lib/auth';
 import { SupabaseAuthModal } from './SupabaseAuthModal';
 import { WatchDemoModal } from './WatchDemoModal';
+import { useModal } from '../lib/useModal';
 
 interface LandingViewProps {
   onLaunchApp: (tab?: 'Journal' | 'Dashboard') => void;
   onOpenNewSummary: () => void;
   onOpenArchitecture: () => void;
-  onSelectDoc: (doc: DocumentSummary) => void;
-  sampleDocs: DocumentSummary[];
 }
 
 export const LandingView: React.FC<LandingViewProps> = ({
   onLaunchApp,
   onOpenNewSummary,
   onOpenArchitecture,
-  onSelectDoc,
-  sampleDocs,
 }) => {
   // Parallax scroll position tracker
   const [scrollY, setScrollY] = useState(0);
 
   // Supabase Auth state
-  const [session, setSession] = useState<AcademicSession | null>(() => supabase.getSession());
+  const authState = useAuth();
+  const session = authState.status === 'signedIn' ? authState : null;
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [isWatchDemoOpen, setIsWatchDemoOpen] = useState(false);
   const [showRlsModal, setShowRlsModal] = useState(false);
+  const rlsRef = useModal<HTMLDivElement>(showRlsModal, () => setShowRlsModal(false));
 
   // Active Headline Switcher
   const headlineVariants = [
@@ -74,12 +54,12 @@ export const LandingView: React.FC<LandingViewProps> = ({
   // Traction badge toggle
   const [badgeVariant, setBadgeVariant] = useState(0);
   const badges = [
-    'Used by 10,000+ students & researchers 📚',
-    'Now supports 40+ file formats 📄',
-    'Trained on 5M+ peer-reviewed papers 🎓'
+    'PDF, Word, text and web links 📄',
+    'Summaries in English and Kiswahili 🌍',
+    'Your summaries stay private to your account 🔒'
   ];
 
-  // Interactive Model Sandbox State
+  // Three hand-written examples that show the shape of a summary. Nothing here is generated live.
   const demoSamples = [
     {
       id: 'cs',
@@ -92,8 +72,6 @@ export const LandingView: React.FC<LandingViewProps> = ({
         'Positions are encoded using positional sinusoidal or learned embeddings.',
         'High computational efficiency allows massive parallelization across GPU clusters.'
       ],
-      reduction: '81% compressed',
-      model: 'BERT-Academic-v2.4',
     },
     {
       id: 'lead',
@@ -106,8 +84,6 @@ export const LandingView: React.FC<LandingViewProps> = ({
         'Initiative in small group settings directly correlates with higher academic engagement.',
         'Metacognitive reflection journals cement emotional resilience.'
       ],
-      reduction: '84% compressed',
-      model: 'T5-EastAfrica Abstractive',
     },
     {
       id: 'econ',
@@ -120,23 +96,15 @@ export const LandingView: React.FC<LandingViewProps> = ({
         'Supply-side shocks in food and energy require coordinated fiscal-monetary responses.',
         'Foreign exchange buffer adequacy is critical for currency stability.'
       ],
-      reduction: '79% compressed',
-      model: 'BERT-Academic-v2.4',
     }
   ];
 
   const [activeDemoIndex, setActiveDemoIndex] = useState(0);
-  const [demoMode, setDemoMode] = useState<'abstractive' | 'extractive'>('abstractive');
-  const [isSynthesizing, setIsSynthesizing] = useState(false);
   const currentSample = demoSamples[activeDemoIndex];
-
-  // Supabase Auth listener
-  useEffect(() => {
-    const unsub = supabase.onAuthStateChange((newSession) => {
-      setSession(newSession);
-    });
-    return unsub;
-  }, []);
+  const wordCount = (text: string) => text.split(/\s+/).filter(Boolean).length;
+  const sampleWords = wordCount(currentSample.source);
+  const sampleSummaryWords = wordCount([currentSample.summary, ...currentSample.takeaways].join(' '));
+  const sampleShorter = Math.max(0, Math.round((1 - sampleSummaryWords / sampleWords) * 100));
 
   // Window scroll event listener for multi-layer parallax depth
   useEffect(() => {
@@ -146,13 +114,6 @@ export const LandingView: React.FC<LandingViewProps> = ({
     window.addEventListener('scroll', handleScroll, { passive: true });
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
-
-  const handleRunDemo = () => {
-    setIsSynthesizing(true);
-    setTimeout(() => {
-      setIsSynthesizing(false);
-    }, 800);
-  };
 
   // Protected route action handler
   const handleProtectedAction = (tab: 'Journal' | 'Dashboard' = 'Dashboard') => {
@@ -240,12 +201,6 @@ export const LandingView: React.FC<LandingViewProps> = ({
             Use Cases
           </button>
           <button 
-            onClick={() => scrollToSection('pricing')}
-            className="hover:text-slate-950 transition-colors"
-          >
-            Pricing
-          </button>
-          <button 
             onClick={() => scrollToSection('contact')}
             className="hover:text-slate-950 transition-colors"
           >
@@ -258,10 +213,9 @@ export const LandingView: React.FC<LandingViewProps> = ({
           {session ? (
             /* Authenticated User: routes straight to Dashboard */
             <div className="flex items-center gap-2">
-              <div 
-                onClick={() => setIsAuthModalOpen(true)}
-                className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 bg-slate-100 hover:bg-slate-200 rounded-full text-xs font-medium text-slate-700 cursor-pointer transition-colors"
-                title="Supabase Auth Session Active"
+              <div
+                className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 bg-slate-100 rounded-full text-xs font-medium text-slate-700"
+                title="Signed in"
               >
                 <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
                 <span className="font-bold text-slate-900 truncate max-w-[90px]">
@@ -269,6 +223,13 @@ export const LandingView: React.FC<LandingViewProps> = ({
                 </span>
                 <span className="text-[10px] text-slate-500 capitalize">({session.user.role})</span>
               </div>
+
+              <button
+                onClick={() => void auth.signOut()}
+                className="px-3 py-1.5 rounded-full text-xs font-bold text-slate-600 hover:text-slate-950 hover:bg-slate-100 transition-colors"
+              >
+                Sign out
+              </button>
 
               <button
                 onClick={() => onLaunchApp('Dashboard')}
@@ -352,14 +313,14 @@ export const LandingView: React.FC<LandingViewProps> = ({
 
               <circle cx="500" cy="240" r="10" fill="#10B981" />
               <circle cx="500" cy="240" r="22" stroke="#10B981" strokeWidth="1" opacity="0.4" />
-              <text x="520" y="245" fill="#064E3B" fontSize="12" fontWeight="bold">T5 Transformer Synthesis</text>
+              <text x="520" y="245" fill="#064E3B" fontSize="12" fontWeight="bold">Structured Summary</text>
 
               <circle cx="850" cy="200" r="9" fill="#3B82F6" />
               <circle cx="850" cy="200" r="20" stroke="#3B82F6" strokeWidth="1" opacity="0.4" />
               <text x="730" y="225" fill="#1E3A8A" fontSize="12" fontWeight="bold">Socratic Active Recall</text>
 
               <circle cx="620" cy="310" r="7" fill="#8B5CF6" />
-              <text x="640" y="315" fill="#4C1D95" fontSize="11" fontWeight="bold">Ebbinghaus Curve</text>
+              <text x="640" y="315" fill="#4C1D95" fontSize="11" fontWeight="bold">Spaced Review</text>
             </g>
           </svg>
         </div>
@@ -377,7 +338,7 @@ export const LandingView: React.FC<LandingViewProps> = ({
           <div className="absolute top-[28%] left-[5%] lg:left-[10%] w-48 sm:w-56 p-4 rounded-2xl bg-white/70 backdrop-blur-md shadow-lg border border-slate-200/80 -rotate-6 hidden sm:block opacity-60">
             <div className="flex items-center gap-1.5 text-[10px] font-bold text-slate-400 mb-2">
               <FileText className="w-3 h-3 text-red-500" />
-              <span>Raw Lecture Notes (34 pgs)</span>
+              <span>Long lecture notes</span>
             </div>
             <div className="space-y-1.5">
               <div className="h-2 bg-slate-300 rounded w-full" />
@@ -417,9 +378,9 @@ export const LandingView: React.FC<LandingViewProps> = ({
             <div className="flex items-center justify-between mb-2">
               <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200 flex items-center gap-1">
                 <Sparkles className="w-2.5 h-2.5 text-emerald-600" />
-                82% Compressed
+                Example
               </span>
-              <span className="text-[10px] font-mono text-slate-400">ROUGE: 0.88</span>
+              <span className="text-[10px] font-mono text-slate-400">illustration</span>
             </div>
             <p className="text-xs font-semibold text-slate-800 leading-snug">
               Multi-head attention eliminates recurrent latency for parallel gradient descent.
@@ -485,7 +446,7 @@ export const LandingView: React.FC<LandingViewProps> = ({
 
           {/* Subheadline matching reference rhythm: "So you can take a breath." */}
           <p className="text-sm sm:text-lg text-slate-700 max-w-2xl mx-auto leading-relaxed font-normal">
-            Upload lecture notes and research papers. Get concise takeaways, Socratic discussion cards, and structured study guides — instantly.
+            Upload lecture notes and research papers. Get a structured summary, key points and discussion questions for revision.
             <span className="block mt-2 font-medium text-slate-800">
               So you can take a breath.
             </span>
@@ -516,9 +477,7 @@ export const LandingView: React.FC<LandingViewProps> = ({
           <div className="pt-4 flex flex-wrap items-center justify-center gap-2 text-xs text-slate-600">
             <span className="font-semibold text-slate-900">The East Africa University</span>
             <span>•</span>
-            <span>Noel Juma Muhemba (BCSITP/0003/S24)</span>
-            <span>•</span>
-            <span className="text-emerald-700 font-medium">BERT & T5 NLP Pipeline</span>
+            <span className="text-emerald-700 font-medium">Open-weights AI summarization</span>
           </div>
         </div>
 
@@ -553,7 +512,7 @@ export const LandingView: React.FC<LandingViewProps> = ({
             How Knowledge Gets Distilled
           </h2>
           <p className="text-sm text-slate-600 leading-relaxed">
-            From fragmented 40-page lecture handouts to crystal-clear Socratic memory anchors in seconds.
+            From long readings to a structured summary and revision questions.
           </p>
         </div>
 
@@ -568,12 +527,12 @@ export const LandingView: React.FC<LandingViewProps> = ({
             <div className="space-y-1.5">
               <h3 className="font-bold text-base text-slate-950">Ingest Chaotic Materials</h3>
               <p className="text-xs text-slate-600 leading-relaxed">
-                Drop in raw PDFs, DOCX files, scanned thesis chapters, or past exam revisions. OCR extracts formulas and mathematical statements.
+                Upload PDF, Word, text or Markdown files, paste a web link, or paste your notes. Scanned PDFs are read with OCR, so check the result for recognition errors.
               </p>
             </div>
             <div className="bg-slate-50 p-3 rounded-xl border border-slate-100 font-mono text-[10px] text-slate-500">
               ✓ Multi-page PDF parser<br />
-              ✓ Scanned handouts (Tesseract)<br />
+              ✓ Scanned pages read with OCR<br />
               ✓ Automatic noise stripping
             </div>
           </div>
@@ -584,15 +543,15 @@ export const LandingView: React.FC<LandingViewProps> = ({
               02
             </div>
             <div className="space-y-1.5">
-              <h3 className="font-bold text-base text-slate-950">Dual-Tier Transformer AI</h3>
+              <h3 className="font-bold text-base text-slate-950">AI Summarization</h3>
               <p className="text-xs text-slate-600 leading-relaxed">
-                BERT semantic embeddings rank sentence salience, while fine-tuned T5 generates fluent abstractive takeaways with 0.865 ROUGE-L accuracy.
+                An open-weights language model writes an abstractive summary, or TextRank picks the key sentences and quotes them from your document (extractive). Long documents are read in sections.
               </p>
             </div>
             <div className="bg-amber-50/50 p-3 rounded-xl border border-amber-100 font-mono text-[10px] text-amber-800">
-              ✓ 82.5% compression ratio<br />
+              ✓ Concise, balanced or detailed length<br />
               ✓ English & Swahili support<br />
-              ✓ Zero hallucination guard
+              ✓ Figures checked against the source
             </div>
           </div>
 
@@ -604,13 +563,13 @@ export const LandingView: React.FC<LandingViewProps> = ({
             <div className="space-y-1.5">
               <h3 className="font-bold text-base text-slate-950">Socratic Active Recall</h3>
               <p className="text-xs text-slate-600 leading-relaxed">
-                Replaces passive skimming with provocative discussion questions and an automated 1-3-7-30 day Ebbinghaus spaced study schedule.
+                Every summary comes with discussion questions, and a 1, 3, 7 and 30 day review schedule based on when you made it.
               </p>
             </div>
             <div className="bg-emerald-50/50 p-3 rounded-xl border border-emerald-100 font-mono text-[10px] text-emerald-800">
-              ✓ Socratic inquiry cards<br />
-              ✓ Ebbinghaus revision alerts<br />
-              ✓ Supervisor commentary thread
+              ✓ Discussion questions<br />
+              ✓ Spaced review schedule<br />
+              ✓ Comments and notes on each summary
             </div>
           </div>
 
@@ -621,13 +580,13 @@ export const LandingView: React.FC<LandingViewProps> = ({
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-100">
             <div>
               <span className="text-xs font-bold text-amber-700 bg-amber-50 px-2.5 py-0.5 rounded-full border border-amber-200 mb-1 inline-block">
-                Live Interactive Sandbox
+                Examples
               </span>
               <h3 className="text-lg sm:text-xl font-bold text-slate-900">
-                Experience Paper-to-Insight Synthesis
+                What a summary looks like
               </h3>
               <p className="text-xs text-slate-500">
-                Select a sample university paper below to watch the NLP compression in real-time.
+                Three short examples, written by hand to show the format. They are not generated live; create a summary of your own document to see the real thing.
               </p>
             </div>
 
@@ -635,10 +594,7 @@ export const LandingView: React.FC<LandingViewProps> = ({
               {demoSamples.map((sample, idx) => (
                 <button
                   key={sample.id}
-                  onClick={() => {
-                    setActiveDemoIndex(idx);
-                    handleRunDemo();
-                  }}
+                  onClick={() => setActiveDemoIndex(idx)}
                   className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-all ${
                     activeDemoIndex === idx
                       ? 'bg-slate-900 text-white shadow-xs'
@@ -659,28 +615,16 @@ export const LandingView: React.FC<LandingViewProps> = ({
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
                     <FileText className="w-3.5 h-3.5 text-amber-600" />
-                    Unstructured Source Excerpt
+                    Source excerpt
                   </span>
                   <span className="text-[10px] font-mono text-slate-500 bg-white px-2 py-0.5 rounded border border-slate-200">
-                    {currentSample.source.split(' ').length} words
+                    {sampleWords} words
                   </span>
                 </div>
                 <h4 className="font-bold text-xs text-slate-900">{currentSample.title}</h4>
                 <p className="text-xs text-slate-600 leading-relaxed font-serif bg-white p-3.5 rounded-xl border border-slate-200 max-h-48 overflow-y-auto">
                   {currentSample.source}
                 </p>
-              </div>
-
-              <div className="pt-3 border-t border-slate-200 flex items-center justify-between flex-wrap gap-2 text-xs">
-                <span className="text-slate-500">Model: <strong>{currentSample.model}</strong></span>
-                <button
-                  onClick={handleRunDemo}
-                  disabled={isSynthesizing}
-                  className="px-4 py-1.5 bg-amber-600 hover:bg-amber-500 text-white font-bold rounded-full flex items-center gap-1.5 shadow-xs transition-all disabled:opacity-50"
-                >
-                  <RotateCw className={`w-3.5 h-3.5 ${isSynthesizing ? 'animate-spin' : ''}`} />
-                  <span>{isSynthesizing ? 'Distilling...' : 'Re-Synthesize'}</span>
-                </button>
               </div>
             </div>
 
@@ -690,10 +634,10 @@ export const LandingView: React.FC<LandingViewProps> = ({
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-bold text-amber-900 flex items-center gap-1.5">
                     <Sparkles className="w-3.5 h-3.5 text-amber-600" />
-                    Structured Salient Takeaway
+                    Summary
                   </span>
                   <span className="text-[10px] font-bold text-amber-800 bg-amber-100 px-2.5 py-0.5 rounded-full border border-amber-300">
-                    {currentSample.reduction}
+                    {sampleShorter}% shorter
                   </span>
                 </div>
 
@@ -704,7 +648,7 @@ export const LandingView: React.FC<LandingViewProps> = ({
 
                   <div className="pt-2 border-t border-slate-100 space-y-1.5">
                     <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
-                      Core Concept Anchors:
+                      Key points:
                     </span>
                     {currentSample.takeaways.map((item, i) => (
                       <div key={i} className="flex items-start gap-2 text-xs text-slate-700">
@@ -717,18 +661,13 @@ export const LandingView: React.FC<LandingViewProps> = ({
               </div>
 
               <div className="pt-3 border-t border-amber-200 flex items-center justify-between">
-                <span className="text-[11px] text-amber-900 font-semibold">
-                  Factual Accuracy: <strong>0.88 ROUGE-L</strong>
-                </span>
+                <span className="text-[11px] text-amber-900">Hand-written example</span>
 
                 <button
-                  onClick={() => {
-                    const match = sampleDocs.find(d => d.title.toLowerCase().includes(currentSample.title.toLowerCase().slice(0, 10))) || sampleDocs[0];
-                    if (match) onSelectDoc(match);
-                  }}
+                  onClick={() => (session ? onOpenNewSummary() : setIsAuthModalOpen(true))}
                   className="px-4 py-1.5 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-full flex items-center gap-1.5 shadow-xs transition-colors"
                 >
-                  <span>Open in Workspace</span>
+                  <span>Summarise your own document</span>
                   <ArrowRight className="w-3 h-3 text-amber-400" />
                 </button>
               </div>
@@ -756,7 +695,7 @@ export const LandingView: React.FC<LandingViewProps> = ({
               Built for Every Role in Higher Education
             </h2>
             <p className="text-xs sm:text-sm text-slate-600">
-              Whether preparing for comprehensive finals or conducting systematic literature reviews.
+              For revising a course, or for reading a long paper quickly.
             </p>
           </div>
 
@@ -770,21 +709,21 @@ export const LandingView: React.FC<LandingViewProps> = ({
               <div>
                 <h3 className="font-bold text-base text-slate-900">Undergrad & Postgrad Students</h3>
                 <p className="text-xs text-slate-600 mt-1">
-                  Synthesize semester lecture decks, create active recall flashcards, and maintain personal learning journals.
+                  Summarise lecture notes and readings, revise with discussion questions, and keep your own notes beside each summary.
                 </p>
               </div>
               <ul className="text-xs text-slate-700 space-y-2 pt-3 border-t border-slate-200/70">
                 <li className="flex items-center gap-2">
                   <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                  <span>Exam preparation Socratic flashcards</span>
+                  <span>Revision questions for each summary</span>
                 </li>
                 <li className="flex items-center gap-2">
                   <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                  <span>Spaced repetition revision alerts</span>
+                  <span>1, 3, 7 and 30 day review schedule</span>
                 </li>
                 <li className="flex items-center gap-2">
                   <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                  <span>PDF, Word, Markdown binder export</span>
+                  <span>Export to PDF, Word, text or Markdown</span>
                 </li>
               </ul>
             </div>
@@ -797,7 +736,7 @@ export const LandingView: React.FC<LandingViewProps> = ({
               <div>
                 <h3 className="font-bold text-base text-slate-900">Academic Researchers</h3>
                 <p className="text-xs text-slate-600 mt-1">
-                  Accelerate literature reviews by isolating methodology, findings, and theoretical limitations across hundreds of papers.
+                  Get the main argument, methods and findings of a long paper, then check them against the source.
                 </p>
               </div>
               <ul className="text-xs text-slate-700 space-y-2 pt-3 border-t border-slate-200/70">
@@ -811,7 +750,7 @@ export const LandingView: React.FC<LandingViewProps> = ({
                 </li>
                 <li className="flex items-center gap-2">
                   <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                  <span>ROUGE-L factual coherence metric</span>
+                  <span>Warns about figures not found in the source</span>
                 </li>
               </ul>
             </div>
@@ -824,160 +763,25 @@ export const LandingView: React.FC<LandingViewProps> = ({
               <div>
                 <h3 className="font-bold text-base text-slate-900">Faculty & Supervisors</h3>
                 <p className="text-xs text-slate-600 mt-1">
-                  Audit student comprehension, review reflection journals, and leave formative annotations directly on coursework.
+                  See how well the summarizer is working for your students, without seeing any of their work.
                 </p>
               </div>
               <ul className="text-xs text-slate-700 space-y-2 pt-3 border-t border-slate-200/70">
                 <li className="flex items-center gap-2">
                   <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                  <span>Direct supervisor feedback thread</span>
+                  <span>Average ratings across all users</span>
                 </li>
                 <li className="flex items-center gap-2">
                   <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                  <span>Departmental curriculum ingestion</span>
+                  <span>Groups too small to identify anyone are hidden</span>
                 </li>
                 <li className="flex items-center gap-2">
                   <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                  <span>FERPA compliant Row Level Security</span>
+                  <span>Faculty accounts are set up by an administrator</span>
                 </li>
               </ul>
             </div>
 
-          </div>
-
-        </div>
-      </div>
-
-
-      {/* ========================================================= */}
-      {/* 5. PRICING & CAMPUS ACCESS SECTION                        */}
-      {/* ========================================================= */}
-      <div id="pricing" className="w-full max-w-6xl mx-auto px-4 sm:px-6 py-20 space-y-12">
-        <div className="text-center max-w-xl mx-auto space-y-3">
-          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 text-emerald-700 text-xs font-bold">
-            <Star className="w-3.5 h-3.5 text-emerald-600" />
-            <span>Academic Pricing & Grants</span>
-          </div>
-          <h2 className="text-3xl font-extrabold text-slate-950 tracking-tight">
-            Transparent Campus Access
-          </h2>
-          <p className="text-xs sm:text-sm text-slate-600">
-            Complimentary access for East Africa University scholars and open-source researchers.
-          </p>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          
-          {/* Free Student Tier */}
-          <div className="bg-white rounded-3xl p-6 border border-slate-200/90 shadow-sm space-y-5 flex flex-col justify-between">
-            <div className="space-y-4">
-              <div>
-                <h3 className="font-bold text-lg text-slate-900">Student Scholar</h3>
-                <p className="text-xs text-slate-500">For active university coursework & exams.</p>
-              </div>
-              <div className="flex items-baseline gap-1">
-                <span className="text-3xl font-extrabold text-slate-900">$0</span>
-                <span className="text-xs text-slate-500">/ semester</span>
-              </div>
-              <ul className="text-xs text-slate-600 space-y-2 pt-3 border-t border-slate-100">
-                <li className="flex items-center gap-2">
-                  <Check className="w-3.5 h-3.5 text-emerald-600" />
-                  <span>50 document syntheses / month</span>
-                </li>
-                <li className="flex items-center gap-2">
-                  <Check className="w-3.5 h-3.5 text-emerald-600" />
-                  <span>PDF, Word & Text ingestion</span>
-                </li>
-                <li className="flex items-center gap-2">
-                  <Check className="w-3.5 h-3.5 text-emerald-600" />
-                  <span>Socratic active recall cards</span>
-                </li>
-              </ul>
-            </div>
-
-            <button
-              onClick={() => handleProtectedAction('Dashboard')}
-              className="w-full py-2.5 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold transition-colors"
-            >
-              Start Free Today
-            </button>
-          </div>
-
-          {/* Pro Scholar Tier */}
-          <div className="bg-slate-900 text-white rounded-3xl p-6 border border-slate-800 shadow-xl space-y-5 flex flex-col justify-between relative overflow-hidden">
-            <div className="absolute top-4 right-4 bg-amber-400 text-slate-950 font-extrabold text-[10px] px-2.5 py-0.5 rounded-full uppercase tracking-wider">
-              Popular
-            </div>
-            <div className="space-y-4">
-              <div>
-                <h3 className="font-bold text-lg text-white">Research Fellow</h3>
-                <p className="text-xs text-slate-400">For thesis and publication literature reviews.</p>
-              </div>
-              <div className="flex items-baseline gap-1">
-                <span className="text-3xl font-extrabold text-white">$8</span>
-                <span className="text-xs text-slate-400">/ month</span>
-              </div>
-              <ul className="text-xs text-slate-300 space-y-2 pt-3 border-t border-slate-800">
-                <li className="flex items-center gap-2">
-                  <Check className="w-3.5 h-3.5 text-amber-400" />
-                  <span>Unlimited paper syntheses</span>
-                </li>
-                <li className="flex items-center gap-2">
-                  <Check className="w-3.5 h-3.5 text-amber-400" />
-                  <span>Side-by-side verification mode</span>
-                </li>
-                <li className="flex items-center gap-2">
-                  <Check className="w-3.5 h-3.5 text-amber-400" />
-                  <span>ROUGE-L factual audit reports</span>
-                </li>
-                <li className="flex items-center gap-2">
-                  <Check className="w-3.5 h-3.5 text-amber-400" />
-                  <span>Priority GPU inference cluster</span>
-                </li>
-              </ul>
-            </div>
-
-            <button
-              onClick={() => handleProtectedAction('Dashboard')}
-              className="w-full py-2.5 rounded-full bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-bold transition-all shadow-md"
-            >
-              Get Started with Pro
-            </button>
-          </div>
-
-          {/* Campus Enterprise */}
-          <div className="bg-white rounded-3xl p-6 border border-slate-200/90 shadow-sm space-y-5 flex flex-col justify-between">
-            <div className="space-y-4">
-              <div>
-                <h3 className="font-bold text-lg text-slate-900">Campus Department</h3>
-                <p className="text-xs text-slate-500">School of CS & IT institutional license.</p>
-              </div>
-              <div className="flex items-baseline gap-1">
-                <span className="text-3xl font-extrabold text-slate-900">Campus</span>
-                <span className="text-xs text-slate-500">Grant Funded</span>
-              </div>
-              <ul className="text-xs text-slate-600 space-y-2 pt-3 border-t border-slate-100">
-                <li className="flex items-center gap-2">
-                  <Check className="w-3.5 h-3.5 text-emerald-600" />
-                  <span>Entire department student roster</span>
-                </li>
-                <li className="flex items-center gap-2">
-                  <Check className="w-3.5 h-3.5 text-emerald-600" />
-                  <span>Supervisor annotation workflow</span>
-                </li>
-                <li className="flex items-center gap-2">
-                  <Check className="w-3.5 h-3.5 text-emerald-600" />
-                  <span>Postgres RLS Multi-tenant isolation</span>
-                </li>
-              </ul>
-            </div>
-
-            <button
-              onClick={() => setShowRlsModal(true)}
-              className="w-full py-2.5 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold transition-colors"
-            >
-              Inspect Security Architecture
-            </button>
           </div>
 
         </div>
@@ -992,14 +796,14 @@ export const LandingView: React.FC<LandingViewProps> = ({
           <div className="space-y-2 max-w-2xl">
             <div className="flex items-center gap-2">
               <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 font-mono text-[10px] uppercase font-bold">
-                Supabase Auth & PostgreSQL RLS
+                Sign-in and privacy
               </span>
             </div>
             <h3 className="text-xl sm:text-2xl font-bold text-white">
-              Gated Academic Privacy & Row-Level Security
+              Your work is visible only to you
             </h3>
             <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">
-              Public marketing sits gracefully before an authenticated session wall. When logged in via Supabase, routes transition seamlessly to the dashboard while Postgres RLS policies guarantee only authorized students and faculty access sensitive thesis notes.
+              Each account can read only its own summaries, notes, comments and ratings. The database enforces this with Row Level Security, so it does not depend on the app behaving. Faculty accounts, which an administrator sets up, see only averaged ratings, never anyone's documents.
             </p>
           </div>
 
@@ -1009,14 +813,14 @@ export const LandingView: React.FC<LandingViewProps> = ({
               className="px-5 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs rounded-full shadow-md transition-all flex items-center gap-2"
             >
               <Lock className="w-3.5 h-3.5" />
-              <span>Test Auth Flow</span>
+              <span>Sign in or create an account</span>
             </button>
             <button
               onClick={() => setShowRlsModal(true)}
               className="px-4 py-2.5 bg-white/10 hover:bg-white/20 text-white font-semibold text-xs rounded-full border border-white/15 transition-all flex items-center gap-1.5"
             >
               <Code2 className="w-3.5 h-3.5 text-emerald-400" />
-              <span>View SQL Policies</span>
+              <span>How privacy works</span>
             </button>
           </div>
         </div>
@@ -1041,7 +845,7 @@ export const LandingView: React.FC<LandingViewProps> = ({
                 <span className="text-xs text-slate-400 font-mono">Academic AI</span>
               </div>
               <p className="text-xs text-slate-400 max-w-md leading-relaxed">
-                Automated academic coursework summarization and active-recall reflection platform developed for The East Africa University.
+                Academic summarization and revision tool developed for The East Africa University.
               </p>
             </div>
 
@@ -1056,7 +860,7 @@ export const LandingView: React.FC<LandingViewProps> = ({
                 onClick={onOpenArchitecture}
                 className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs rounded-full transition-colors"
               >
-                6-Stage Architecture
+                How it works
               </button>
             </div>
           </div>
@@ -1085,9 +889,9 @@ export const LandingView: React.FC<LandingViewProps> = ({
           <div className="pt-6 border-t border-slate-800/80 flex flex-col sm:flex-row items-center justify-between gap-4 text-[11px] text-slate-500">
             <p>© 2026 Synth Academic AI • The East Africa University. All rights reserved.</p>
             <div className="flex items-center gap-4">
-              <button onClick={() => setShowRlsModal(true)} className="hover:text-slate-300 transition-colors">Postgres RLS</button>
-              <button onClick={() => setIsAuthModalOpen(true)} className="hover:text-slate-300 transition-colors">Supabase Auth</button>
-              <button onClick={onOpenArchitecture} className="hover:text-slate-300 transition-colors">System Specs</button>
+              <button onClick={() => setShowRlsModal(true)} className="hover:text-slate-300 transition-colors">Privacy</button>
+              <button onClick={() => setIsAuthModalOpen(true)} className="hover:text-slate-300 transition-colors">Sign in</button>
+              <button onClick={onOpenArchitecture} className="hover:text-slate-300 transition-colors">How it works</button>
             </div>
           </div>
 
@@ -1112,52 +916,53 @@ export const LandingView: React.FC<LandingViewProps> = ({
         onLaunchWorkspace={() => onLaunchApp('Journal')}
       />
 
-      {/* RLS Policy Inspector Dialog */}
+      {/* How the privacy rule is enforced: the real policy from supabase/migrations */}
       {showRlsModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-sm animate-in fade-in">
-          <div className="bg-slate-900 text-white w-full max-w-xl rounded-3xl p-6 border border-slate-800 shadow-2xl space-y-4">
+          <div
+            ref={rlsRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="rls-title"
+            tabIndex={-1}
+            className="bg-slate-900 text-white w-full max-w-xl rounded-3xl p-6 border border-slate-800 shadow-2xl space-y-4 outline-hidden"
+          >
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Database className="w-4 h-4 text-emerald-400" />
-                <h4 className="font-bold text-sm">Supabase Row Level Security (RLS) Policy</h4>
+                <h4 id="rls-title" className="font-bold text-sm">How your data is kept private</h4>
               </div>
-              <button onClick={() => setShowRlsModal(false)} className="text-slate-400 hover:text-white text-xs">✕ Close</button>
+              <button onClick={() => setShowRlsModal(false)} aria-label="Close" className="text-slate-400 hover:text-white text-xs">✕ Close</button>
             </div>
             <p className="text-xs text-slate-300 leading-relaxed">
-              Every document is bound to the student's authenticated <code>auth.uid()</code>. Faculty supervisors can only read documents when an enrollment relationship exists in the university database.
+              Every row you create is tied to your account id. The database (Supabase Postgres) only returns and changes rows whose owner is the signed-in user. The same rule is written for documents, summaries, comments, review progress and ratings, and the same folder rule protects uploaded files. This is the rule for documents:
             </p>
             <pre className="bg-slate-950 p-4 rounded-xl text-[11px] font-mono text-emerald-400 border border-slate-800 overflow-x-auto">
-{`-- Enable Row Level Security on Summaries table
-ALTER TABLE summaries ENABLE ROW LEVEL SECURITY;
+{`alter table public.documents enable row level security;
 
--- 1. Student author can view and edit own work
-CREATE POLICY "Student owns document"
-  ON summaries FOR ALL
-  USING (auth.uid() = user_id);
+create policy "documents: read own" on public.documents
+  for select to authenticated
+  using (user_id = (select auth.uid()));
 
--- 2. Faculty supervisor audit policy
-CREATE POLICY "Supervisor can review student submissions"
-  ON summaries FOR SELECT
-  USING (
-    EXISTS (
-      SELECT 1 FROM student_courses
-      WHERE student_courses.student_id = summaries.user_id
-        AND student_courses.supervisor_id = auth.uid()
-    )
-  );`}
+create policy "documents: update own" on public.documents
+  for update to authenticated
+  using (user_id = (select auth.uid()))
+  with check (user_id = (select auth.uid()));`}
             </pre>
+            <p className="text-[11px] text-slate-400 leading-relaxed">
+              To write a summary, the text of your document is sent to an AI service (Groq). Do not summarise material you are not allowed to share with a third party.
+            </p>
             <div className="flex justify-end pt-2">
               <button
                 onClick={() => setShowRlsModal(false)}
                 className="px-4 py-2 bg-emerald-500 text-slate-950 font-bold text-xs rounded-full"
               >
-                Got It
+                Got it
               </button>
             </div>
           </div>
         </div>
       )}
-
     </div>
   );
 };

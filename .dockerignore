@@ -1,0 +1,13 @@
+node_modules
+dist
+server.js
+.git
+.github
+# Never bake secrets into an image: configuration is passed when the container runs.
+.env
+.env.*
+!.env.example
+*.log
+scripts/eval/results
+supabase/tests
+docs

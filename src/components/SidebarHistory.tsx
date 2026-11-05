@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { memo, useCallback, useState } from 'react';
 import { 
   Search, 
   SlidersHorizontal, 
@@ -34,6 +34,24 @@ export const SidebarHistory: React.FC<SidebarHistoryProps> = ({
   const [activeCategoryFilter, setActiveCategoryFilter] = useState<string | 'all'>('all');
   const [showFilterMenu, setShowFilterMenu] = useState(false);
   const [openMenuDocId, setOpenMenuDocId] = useState<string | null>(null);
+
+  // Stable handlers, so an edit to one summary re-renders only that summary's card, not the whole list.
+  const handleSelect = useCallback((doc: DocumentSummary) => onSelectDocument(doc), [onSelectDocument]);
+  const toggleMenu = useCallback((id: string) => setOpenMenuDocId((current) => (current === id ? null : id)), []);
+  const handleDelete = useCallback(
+    (id: string) => {
+      onDeleteDocument(id);
+      setOpenMenuDocId(null);
+    },
+    [onDeleteDocument],
+  );
+  const handleDuplicate = useCallback(
+    (doc: DocumentSummary) => {
+      onDuplicateDocument(doc);
+      setOpenMenuDocId(null);
+    },
+    [onDuplicateDocument],
+  );
 
   // Filter documents
   const filteredDocuments = documents.filter((doc) => {
@@ -139,91 +157,31 @@ export const SidebarHistory: React.FC<SidebarHistoryProps> = ({
       {/* Scrollable list of cards */}
       <div className="flex-1 overflow-y-auto pr-1 -mr-1 space-y-5 scrollbar-thin scrollbar-thumb-slate-200">
         
-        {/* Section: Last 7 days */}
-        {last7Days.length > 0 && (
-          <div>
-            <span className="text-[11px] font-medium text-slate-400 block mb-2 px-1">
-              Last 7 days
-            </span>
-            <div className="space-y-2.5">
-              {last7Days.map((doc) => (
-                <HistoryCard
-                  key={doc.id}
-                  doc={doc}
-                  isSelected={selectedDocId === doc.id}
-                  onSelect={() => onSelectDocument(doc)}
-                  onOpenMenu={(id) => setOpenMenuDocId(openMenuDocId === id ? null : id)}
-                  isMenuOpen={openMenuDocId === doc.id}
-                  onDelete={() => {
-                    onDeleteDocument(doc.id);
-                    setOpenMenuDocId(null);
-                  }}
-                  onDuplicate={() => {
-                    onDuplicateDocument(doc);
-                    setOpenMenuDocId(null);
-                  }}
-                />
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Section: Last 30 days */}
-        {last30Days.length > 0 && (
-          <div>
-            <span className="text-[11px] font-medium text-slate-400 block mb-2 px-1">
-              Last 30 days
-            </span>
-            <div className="space-y-2.5">
-              {last30Days.map((doc) => (
-                <HistoryCard
-                  key={doc.id}
-                  doc={doc}
-                  isSelected={selectedDocId === doc.id}
-                  onSelect={() => onSelectDocument(doc)}
-                  onOpenMenu={(id) => setOpenMenuDocId(openMenuDocId === id ? null : id)}
-                  isMenuOpen={openMenuDocId === doc.id}
-                  onDelete={() => {
-                    onDeleteDocument(doc.id);
-                    setOpenMenuDocId(null);
-                  }}
-                  onDuplicate={() => {
-                    onDuplicateDocument(doc);
-                    setOpenMenuDocId(null);
-                  }}
-                />
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Section: Older */}
-        {older.length > 0 && (
-          <div>
-            <span className="text-[11px] font-medium text-slate-400 block mb-2 px-1">
-              Older
-            </span>
-            <div className="space-y-2.5">
-              {older.map((doc) => (
-                <HistoryCard
-                  key={doc.id}
-                  doc={doc}
-                  isSelected={selectedDocId === doc.id}
-                  onSelect={() => onSelectDocument(doc)}
-                  onOpenMenu={(id) => setOpenMenuDocId(openMenuDocId === id ? null : id)}
-                  isMenuOpen={openMenuDocId === doc.id}
-                  onDelete={() => {
-                    onDeleteDocument(doc.id);
-                    setOpenMenuDocId(null);
-                  }}
-                  onDuplicate={() => {
-                    onDuplicateDocument(doc);
-                    setOpenMenuDocId(null);
-                  }}
-                />
-              ))}
-            </div>
-          </div>
+        {[
+          { label: 'Last 7 days', docs: last7Days },
+          { label: 'Last 30 days', docs: last30Days },
+          { label: 'Older', docs: older },
+        ].map(
+          ({ label, docs }) =>
+            docs.length > 0 && (
+              <div key={label}>
+                <span className="text-[11px] font-medium text-slate-400 block mb-2 px-1">{label}</span>
+                <div className="space-y-2.5">
+                  {docs.map((doc) => (
+                    <HistoryCard
+                      key={doc.id}
+                      doc={doc}
+                      isSelected={selectedDocId === doc.id}
+                      isMenuOpen={openMenuDocId === doc.id}
+                      onSelect={handleSelect}
+                      onToggleMenu={toggleMenu}
+                      onDelete={handleDelete}
+                      onDuplicate={handleDuplicate}
+                    />
+                  ))}
+                </div>
+              </div>
+            ),
         )}
 
         {filteredDocuments.length === 0 && (
@@ -254,27 +212,27 @@ export const SidebarHistory: React.FC<SidebarHistoryProps> = ({
 interface HistoryCardProps {
   doc: DocumentSummary;
   isSelected: boolean;
-  onSelect: () => void;
-  onOpenMenu: (id: string) => void;
   isMenuOpen: boolean;
-  onDelete: () => void;
-  onDuplicate: () => void;
+  onSelect: (doc: DocumentSummary) => void;
+  onToggleMenu: (id: string) => void;
+  onDelete: (id: string) => void;
+  onDuplicate: (doc: DocumentSummary) => void;
 }
 
-const HistoryCard: React.FC<HistoryCardProps> = ({
+const HistoryCard = memo<HistoryCardProps>(function HistoryCard({
   doc,
   isSelected,
-  onSelect,
-  onOpenMenu,
   isMenuOpen,
+  onSelect,
+  onToggleMenu,
   onDelete,
   onDuplicate,
-}) => {
+}) {
   const badgeStyles = getCategoryBadgeStyles(doc.categoryColor);
 
   return (
     <div
-      onClick={onSelect}
+      onClick={() => onSelect(doc)}
       id={`history-card-${doc.id}`}
       className={cn(
         "group relative p-3.5 rounded-2xl cursor-pointer transition-all duration-150 select-none text-left",
@@ -315,7 +273,7 @@ const HistoryCard: React.FC<HistoryCardProps> = ({
           <button
             onClick={(e) => {
               e.stopPropagation();
-              onOpenMenu(doc.id);
+              onToggleMenu(doc.id);
             }}
             title="Options"
             className="w-6 h-6 rounded-md flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
@@ -329,14 +287,14 @@ const HistoryCard: React.FC<HistoryCardProps> = ({
               className="absolute right-0 mt-1 w-36 bg-white rounded-xl shadow-lg border border-slate-200 py-1 z-30 text-xs animate-in fade-in zoom-in-95"
             >
               <button
-                onClick={onDuplicate}
+                onClick={() => onDuplicate(doc)}
                 className="w-full text-left px-3 py-1.5 text-slate-700 hover:bg-slate-50 flex items-center gap-2"
               >
                 <Copy className="w-3.5 h-3.5 text-slate-400" />
                 <span>Duplicate</span>
               </button>
               <button
-                onClick={onDelete}
+                onClick={() => onDelete(doc.id)}
                 className="w-full text-left px-3 py-1.5 text-red-600 hover:bg-red-50 flex items-center gap-2"
               >
                 <Trash2 className="w-3.5 h-3.5 text-red-500" />
@@ -383,4 +341,4 @@ const HistoryCard: React.FC<HistoryCardProps> = ({
       )}
     </div>
   );
-};
+});

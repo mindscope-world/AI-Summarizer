@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Type check
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+      - name: Build (client + server)
+        run: npm run build
+
+      - name: Verify no secrets in client bundle
+        run: npm run verify:bundle
+        env:
+          # A canary secret: the check fails the build if this value ever reaches dist/.
+          GROQ_API_KEY: ci-canary-secret-value-0123456789
+
+      - name: Smoke test the built server
+        # Starts the production bundle (auth off, development mode) and checks health, extraction and all four export formats.
+        run: |
+          PORT=3055 NODE_ENV=development AUTH_MODE=off GROQ_API_KEY=ci-not-a-real-key node server.js &
+          server=$!
+          trap 'kill $server' EXIT
+          for i in $(seq 1 30); do curl -fs http://127.0.0.1:3055/api/health >/dev/null && break; sleep 1; done
+          SMOKE_URL=http://127.0.0.1:3055 node scripts/smoke.mjs
+
+  database:
+    # The schema, Row Level Security and the data layer, against real Postgres + PostgREST in containers.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run test:rls
+
+  docker:
+    # The production image must build (no push, no secrets: the two VITE_ values are public placeholders).
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - run: >
+          docker build
+          --build-arg VITE_SUPABASE_URL=https://example.supabase.co
+          --build-arg VITE_SUPABASE_ANON_KEY=public-placeholder
+          -t leaderforge-ci .
