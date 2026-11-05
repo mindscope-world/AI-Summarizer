@@ -35,6 +35,22 @@
 5. **Give someone faculty.** In the Supabase SQL editor (no signed-in user, so the guard trigger allows it): `update profiles set role = 'faculty' where id = '<user id>';`
 6. **Smoke test:** `SMOKE_URL=https://<your app> node scripts/smoke.mjs`. Add `SMOKE_TOKEN=<access token of a test account>` to also check extraction and all four exports, and `SMOKE_SUMMARIZE=1` for one real summary.
 
+## Free deploy on Render (sleeps when idle)
+
+`render.yaml` describes a free Render web service built from the `Dockerfile`. It sleeps after 15 minutes without traffic; the next request wakes it in about 30-60 seconds. Free instances have 512 MB RAM, so the blueprint caps the Node heap, scanned-PDF OCR (10 pages) and uploads (20 MB).
+
+1. Do steps 1-2 above (Supabase project with migrations, Groq key). Supabase's free tier also pauses a project after a week without activity; resume it from the dashboard.
+2. Push the branch with `render.yaml` to GitHub. In Render: **New > Blueprint**, connect the repo, pick the branch.
+3. Render asks for the values marked `sync: false`:
+   - `VITE_SUPABASE_URL`, `SUPABASE_URL`: the Supabase project URL (both the same)
+   - `VITE_SUPABASE_ANON_KEY`: the anon (publishable) key
+   - `GROQ_API_KEY`: your key
+   - `APP_URL`: leave empty for the first deploy, then set it to `https://<service>.onrender.com`
+4. After the first deploy, add `https://<service>.onrender.com` to Supabase **Authentication > URL Configuration** (Site URL and redirect URLs), and to the Google OAuth client's authorized redirect/origins if you use Google sign-in.
+5. Smoke test: `SMOKE_URL=https://<service>.onrender.com npm run smoke`.
+
+Changing a `VITE_` value needs a rebuild (**Manual Deploy > Clear build cache & deploy**), because it is baked into the bundle.
+
 ## Health and logs
 
 - `GET /api/health` (no auth) is the liveness probe. The image has a Docker `HEALTHCHECK` on it.

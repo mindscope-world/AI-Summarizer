@@ -1,0 +1,35 @@
+# Render Blueprint: free web service that sleeps after 15 minutes idle and wakes on the next request.
+# Deploy: Render dashboard > New > Blueprint > pick this repo. See docs/RUNBOOK.md, "Free deploy on Render".
+services:
+  - type: web
+    name: leaderforge
+    runtime: docker
+    plan: free
+    region: frankfurt
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      # Public values, baked into the browser bundle. Render passes env vars to `docker build` as build args.
+      - key: VITE_SUPABASE_URL
+        sync: false
+      - key: VITE_SUPABASE_ANON_KEY
+        sync: false
+      # Secrets and server settings (runtime only).
+      - key: GROQ_API_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: APP_URL
+        sync: false
+      - key: PORT
+        value: "8080"
+      - key: TRUST_PROXY
+        value: "1"
+      # The free instance has 512 MB RAM: cap the heap and keep scanned-PDF OCR small.
+      - key: NODE_OPTIONS
+        value: --max-old-space-size=384
+      - key: OCR_MAX_PAGES
+        value: "10"
+      - key: MAX_UPLOAD_MB
+        value: "20"
